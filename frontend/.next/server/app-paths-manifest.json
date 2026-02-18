@@ -1,0 +1,8 @@
+{
+  "/page": "app/page.js",
+  "/admin/students/[id]/training/page": "app/admin/students/[id]/training/page.js",
+  "/login/page": "app/login/page.js",
+  "/admin/timetable/page": "app/admin/timetable/page.js",
+  "/faculty/dashboard/page": "app/faculty/dashboard/page.js",
+  "/faculty/live-attendance/page": "app/faculty/live-attendance/page.js"
+}

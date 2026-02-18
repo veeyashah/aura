@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Mobile-specific improvements */
+@layer base {
+  /* Ensure touch targets are at least 44px for mobile accessibility */
+  button, 
+  input[type="button"], 
+  input[type="submit"], 
+  select,
+  input[type="file"] {
+    min-height: 44px;
+  }
+  
+  /* Improve touch scrolling on mobile */
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* Prevent zoom on input focus on mobile */
+  @media screen and (max-width: 768px) {
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+  
+  /* Improve mobile viewport handling */
+  html {
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+  }
+}
+
+/* Custom mobile-friendly components */
+@layer components {
+  .mobile-card {
+    @apply mx-2 lg:mx-0 p-4 lg:p-6;
+  }
+  
+  .mobile-button {
+    @apply px-4 py-3 text-sm lg:text-base font-medium min-h-[44px];
+  }
+  
+  .mobile-input {
+    @apply px-3 lg:px-4 py-2 lg:py-2 text-sm lg:text-base min-h-[44px];
+  }
+}
+
+/* Sidebar styles moved to component for better control */
