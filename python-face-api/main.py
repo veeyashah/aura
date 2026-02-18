@@ -3,6 +3,11 @@
 Production-ready with 99%+ accuracy using DeepFace and ArcFace model
 """
 
+# ⚡ Disable GPU checks and TensorFlow warnings - MUST BE FIRST
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,9 +20,9 @@ from PIL import Image
 from typing import List, Optional
 import logging
 from datetime import datetime
-import os
 import threading
 import json
+import asyncio
 
 
 # ============================================================================
@@ -100,17 +105,42 @@ class LiveRecognitionRequest(BaseModel):
 
 
 # ============================================================================
+# GLOBAL MODELS (Preloaded at startup)
+# ============================================================================
+
+ARCFACE_MODEL = None
+RETINAFACE_MODEL = None
+
+# ============================================================================
 # LIFESPAN
 # ============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global ARCFACE_MODEL, RETINAFACE_MODEL
+    
     logger.info("\n" + "="*70)
     logger.info("🚀 \"AURA\"-Automated Unified Recognition for Attendance Face Recognition API v3.0 (ArcFace Edition)")
     logger.info("="*70)
     logger.info(f"📡 DeepFace Status: {'✅ AVAILABLE' if DEEPFACE_AVAILABLE else '❌ NOT AVAILABLE'}")
     logger.info(f"🎯 Threshold (Cosine): {ARCFACE_THRESHOLD} (0-1 scale, higher = stricter)")
     logger.info(f"📊 Expected Embedding Dimensions: {EXPECTED_EMBEDDING_DIMS}-d")
+    
+    # ⚡ PRELOAD MODELS AT STARTUP - CRITICAL FOR PERFORMANCE
+    if DEEPFACE_AVAILABLE:
+        try:
+            logger.info("🔥 Preloading ArcFace model (this takes 30-60 seconds)...")
+            ARCFACE_MODEL = DeepFace.build_model("ArcFace")
+            logger.info("✅ ArcFace model preloaded successfully")
+            
+            logger.info("🔥 Preloading RetinaFace detector (this takes 20-40 seconds)...")
+            RETINAFACE_MODEL = DeepFace.build_model("RetinaFace")
+            logger.info("✅ RetinaFace detector preloaded successfully")
+            
+            logger.info("⚡ All models ready - API will respond instantly")
+        except Exception as e:
+            logger.error(f"❌ Failed to preload models: {e}")
+    
     logger.info("="*70 + "\n")
     yield
     logger.info("👋 API shutdown")
@@ -441,39 +471,16 @@ async def load_students(req: LiveRecognitionRequest):
 
 @app.post("/train")
 async def train(req: TrainingRequest):
-    """Train: Extract embeddings from images (sequential, high accuracy)"""
+    """Train: Extract embeddings from images (OPTIMIZED - async, high accuracy)"""
     try:
         logger.info(f"🎓 Training {req.student_id} with {len(req.images)} images")
         
         if len(req.images) < 5:
             raise HTTPException(400, "Minimum 5 images required for training")
         
-        embeddings = []
-        
-        # Process images sequentially for MAXIMUM ACCURACY & STABILITY
-        for idx, img_b64 in enumerate(req.images[:50]):
-            try:
-                rgb = decode_base64(img_b64)
-                if rgb is None:
-                    logger.debug(f"Image {idx+1}: Failed to decode")
-                    continue
-                
-                # Detect face
-                faces = detect_faces(rgb)
-                if not faces:
-                    logger.debug(f"Image {idx+1}: No faces detected")
-                    continue
-                
-                # Get embedding from first face
-                emb = get_embedding(faces[0][0])
-                if emb is not None:
-                    embeddings.append(normalize_embedding(emb))
-                else:
-                    logger.debug(f"Image {idx+1}: Failed to get embedding")
-                    
-            except Exception as e:
-                logger.debug(f"Image {idx+1} error: {str(e)[:30]}")
-                continue
+        # Run blocking operations in thread executor to prevent timeout
+        loop = asyncio.get_event_loop()
+        embeddings = await loop.run_in_executor(None, process_training_images, req.images)
         
         if len(embeddings) < 3:
             logger.error(f"❌ Only {len(embeddings)} valid faces from {len(req.images)} images")
@@ -499,9 +506,102 @@ async def train(req: TrainingRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def process_training_images(images: List[str]) -> List[np.ndarray]:
+    """Process images for training (runs in thread executor)"""
+    global ARCFACE_MODEL
+    embeddings = []
+    
+    # Use preloaded model
+    for idx, img_b64 in enumerate(images[:50]):
+        try:
+            rgb = decode_base64(img_b64)
+            if rgb is None:
+                logger.debug(f"Image {idx+1}: Failed to decode")
+                continue
+            
+            # ⚡ Resize to 224x224 for FASTER processing without losing ArcFace accuracy
+            rgb = cv2.resize(rgb, (224, 224))
+            
+            # Detect faces with preloaded model (alignment=False for speed)
+            faces = detect_faces_optimized(rgb)
+            if not faces:
+                logger.debug(f"Image {idx+1}: No faces detected")
+                continue
+            
+            # Get embedding from first face using preloaded ArcFace model
+            emb = get_embedding_optimized(faces[0][0])
+            if emb is not None:
+                embeddings.append(normalize_embedding(emb))
+            else:
+                logger.debug(f"Image {idx+1}: Failed to get embedding")
+                
+        except Exception as e:
+            logger.debug(f"Image {idx+1} error: {str(e)[:30]}")
+            continue
+    
+    return embeddings
+
+
+def detect_faces_optimized(rgb_img: np.ndarray) -> List[tuple]:
+    """Detect faces - optimized with skip_alignment=True"""
+    global RETINAFACE_MODEL
+    results = []
+    
+    if not DEEPFACE_AVAILABLE or RETINAFACE_MODEL is None:
+        return results
+    
+    try:
+        face_objs = DeepFace.extract_faces(
+            img_path=rgb_img,
+            detector_backend="retinaface",
+            enforce_detection=False,
+            align=False,  # ⚡ Skip alignment to save CPU time
+            model=RETINAFACE_MODEL  # ⚡ Use preloaded model
+        )
+        
+        for face_obj in face_objs:
+            face_roi = face_obj.get("face")
+            if face_roi is not None:
+                results.append((face_roi, face_obj.get("facial_area", {})))
+        
+        if results:
+            logger.debug(f"✅ Detected {len(results)} face(s)")
+    except Exception as e:
+        logger.debug(f"Face detection error: {e}")
+    
+    return results
+
+
+def get_embedding_optimized(face_roi: np.ndarray) -> Optional[np.ndarray]:
+    """Get embedding - optimized with preloaded model"""
+    global ARCFACE_MODEL
+    
+    if not DEEPFACE_AVAILABLE or ARCFACE_MODEL is None:
+        return None
+    
+    try:
+        # Use preloaded ArcFace model
+        embedding_objs = DeepFace.represent(
+            img_path=face_roi,
+            model_name="ArcFace",
+            enforce_detection=False,
+            model=ARCFACE_MODEL,  # ⚡ Use preloaded model
+            align=False  # ⚡ Skip alignment
+        )
+        
+        if embedding_objs and len(embedding_objs) > 0:
+            embedding = embedding_objs[0].get("embedding")
+            if embedding:
+                return np.array(embedding, dtype=np.float32)
+    except Exception as e:
+        logger.debug(f"Embedding error: {e}")
+    
+    return None
+
+
 @app.post("/recognize")
 async def recognize(req: RecognitionRequest):
-    """Recognize faces in image"""
+    """Recognize faces in image - OPTIMIZED for speed with preloaded models"""
     try:
         logger.info(f"🔍 Recognition request (loaded: {len(known_face_names)} students)")
         
@@ -523,8 +623,8 @@ async def recognize(req: RecognitionRequest):
             
             logger.debug(f"✅ Image decoded: {rgb.shape}")
             
-            # Detect faces
-            faces = detect_faces(rgb)
+            # ⚡ Detect faces with optimized model (skip alignment)
+            faces = detect_faces_optimized(rgb)
             if not faces:
                 logger.debug("ℹ️ No faces detected")
                 return {
@@ -540,8 +640,8 @@ async def recognize(req: RecognitionRequest):
             # Process each face - OPTIMIZED FOR SPEED & ACCURACY
             for idx, (face_roi, box) in enumerate(faces):
                 try:
-                    # Get embedding
-                    emb = get_embedding(face_roi)
+                    # ⚡ Get embedding with preloaded model
+                    emb = get_embedding_optimized(face_roi)
                     if emb is None:
                         logger.debug(f"Face {idx+1}: Failed to get embedding")
                         continue

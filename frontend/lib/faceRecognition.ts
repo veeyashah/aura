@@ -110,15 +110,12 @@ export const trainStudent = async (studentId: string, images: string[]) => {
 
     let response: Response
     try {
-      // Compress images before sending to reduce payload
-      const compressedImages = images.map(img => compressImageBase64(img, 0.3))
-      
       response = await fetch(`${PYTHON_API_URL}/train`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ student_id: studentId, images: compressedImages }),
+        body: JSON.stringify({ student_id: studentId, images: images }),
         signal: controller.signal
       })
     } catch (err) {
