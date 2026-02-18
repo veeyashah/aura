@@ -1,7 +1,0 @@
-{
-  "/faculty/dashboard/page": "app/faculty/dashboard/page.js",
-  "/faculty/timetable/page": "app/faculty/timetable/page.js",
-  "/faculty/live-attendance/page": "app/faculty/live-attendance/page.js",
-  "/login/page": "app/login/page.js",
-  "/faculty/export/page": "app/faculty/export/page.js"
-}
