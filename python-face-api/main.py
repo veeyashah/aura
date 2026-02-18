@@ -265,13 +265,13 @@ def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
 
 def detect_faces(rgb_img: np.ndarray) -> List[tuple]:
     """Detect faces with multiple fallbacks"""
-    # Try DeepFace first (better accuracy)
-    faces = detect_faces_deepface(rgb_img)
+    # Try OpenCV first for speed
+    faces = detect_faces_opencv(rgb_img)
     if faces:
         return faces
-    
-    # Fallback to OpenCV
-    faces = detect_faces_opencv(rgb_img)
+
+    # Fallback to DeepFace (heavier but more accurate)
+    faces = detect_faces_deepface(rgb_img)
     if faces:
         return faces
     
@@ -449,9 +449,11 @@ async def train(req: TrainingRequest):
             raise HTTPException(400, "Minimum 3 images required for training")
         
         embeddings = []
-        
+        max_images = min(len(req.images), 30)
+        target_embeddings = 12
+
         # Process images sequentially for maximum stability
-        for idx, img_b64 in enumerate(req.images[:50]):
+        for idx, img_b64 in enumerate(req.images[:max_images]):
             try:
                 rgb = decode_base64(img_b64)
                 if rgb is None:
@@ -468,6 +470,8 @@ async def train(req: TrainingRequest):
                 emb = get_embedding(faces[0][0])
                 if emb is not None:
                     embeddings.append(normalize_embedding(emb))
+                    if len(embeddings) >= target_embeddings:
+                        break
                 else:
                     logger.debug(f"Image {idx+1}: Failed to get embedding")
                     

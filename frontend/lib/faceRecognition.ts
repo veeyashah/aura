@@ -1,6 +1,6 @@
 // Python Face Recognition API integration
 const PYTHON_API_URL = typeof window !== 'undefined' 
-  ? (process.env.NEXT_PUBLIC_FACE_API_URL || 'http://localhost:8000')
+  ? (process.env.NEXT_PUBLIC_PYTHON_API_URL || 'http://localhost:8000')
   : 'http://localhost:8000'
 
 // Helper: Compress image to smaller size
@@ -106,7 +106,7 @@ export const trainStudent = async (studentId: string, images: string[]) => {
 
     // Use AbortController to enforce a timeout for the training request
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 180_000) // 180s
+    const timeout = setTimeout(() => controller.abort(), 240_000) // allow extra time for cold starts
 
     let response: Response
     try {
@@ -120,7 +120,7 @@ export const trainStudent = async (studentId: string, images: string[]) => {
       })
     } catch (err) {
       if ((err as any)?.name === 'AbortError') {
-        throw new Error('Training request timed out (180s)')
+        throw new Error('Training request timed out (240s)')
       }
       const m = err instanceof Error ? err.message : String(err)
       throw new Error(`Failed to reach Python API: ${m}`)

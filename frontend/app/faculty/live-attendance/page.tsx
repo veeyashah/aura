@@ -234,7 +234,7 @@ export default function LiveAttendance() {
         );
       }
 
-      const apiUrl = process.env.NEXT_PUBLIC_FACE_API_URL || "http://localhost:8000";
+      const apiUrl = process.env.NEXT_PUBLIC_PYTHON_API_URL || "http://localhost:8000";
 
       const loadResponse = await fetch(`${apiUrl}/load-students`, {
         method: "POST",
@@ -330,7 +330,7 @@ export default function LiveAttendance() {
         // Use 0.65 quality for recognition (original working)
         const imageData = tempCanvas.toDataURL("image/jpeg", 0.65);
 
-        const apiUrl = process.env.NEXT_PUBLIC_FACE_API_URL || "http://localhost:8000";
+        const apiUrl = process.env.NEXT_PUBLIC_PYTHON_API_URL || "http://localhost:8000";
 
         console.log(`🔍 Sending frame to ${apiUrl}/recognize...`);
 
