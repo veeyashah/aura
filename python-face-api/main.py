@@ -1,9 +1,11 @@
 """
-"AURA"-Automated Unified Recognition for Attendance Face Recognition API - ArcFace Edition
-Production-ready with 99%+ accuracy using DeepFace and ArcFace model
+AURA Face Recognition API - Production Ready
+Model: Facenet512 (512-d embeddings, excellent accuracy)
+Detector: OpenCV (lightweight, optimized for Render)
+Optimized for Render Free Tier with preloaded models
 """
 
-# ⚡ Disable GPU checks and TensorFlow warnings - MUST BE FIRST
+# ⚡ Disable TensorFlow GPU checks - MUST BE FIRST
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -40,36 +42,27 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 DEEPFACE_AVAILABLE = False
-DEEPFACE_ERROR = None
-
 try:
     from deepface import DeepFace
     DEEPFACE_AVAILABLE = True
     logger.info("✅ DeepFace imported successfully")
 except ImportError as e:
-    DEEPFACE_ERROR = str(e)
-    logger.warning(f"⚠️ DeepFace import failed: {e}")
-    try:
-        import face_recognition
-        logger.info("✅ face_recognition (dlib) available as fallback")
-    except ImportError:
-        logger.warning("⚠️ No advanced ML library available")
+    logger.error(f"❌ DeepFace import failed: {e}")
 
-# Load OpenCV cascade for fallback face detection
+# Load OpenCV cascade for face detection
 cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 face_cascade = cv2.CascadeClassifier(cascade_path)
-logger.info(f"✅ OpenCV Haar Cascade loaded from: {cascade_path}")
+logger.info(f"✅ OpenCV Haar Cascade loaded")
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-# ArcFace uses cosine similarity (0-1 scale, higher = more similar)
-# 0.68 is strict threshold equivalent to 0.35 euclidean distance
-ARCFACE_THRESHOLD = 0.68
+MODEL_NAME = "Facenet512"  # 512-d embeddings, superior accuracy
+DETECTOR = "opencv"  # Lightweight, CPU-friendly
+THRESHOLD = 0.65  # Cosine similarity threshold for Facenet512
 
-# Model dimensions for validation
-EXPECTED_EMBEDDING_DIMS = [512]  # ArcFace produces 512-d embeddings
+EXPECTED_EMBEDDING_DIMS = [512]
 
 # ============================================================================
 # GLOBAL STATE
@@ -80,6 +73,8 @@ known_face_names: List[str] = []
 known_face_ids: List[str] = []
 lock = threading.Lock()
 
+# Preloaded models
+FACENET_MODEL = None
 
 # ============================================================================
 # DATA MODELS
@@ -103,43 +98,30 @@ class StudentData(BaseModel):
 class LiveRecognitionRequest(BaseModel):
     students: List[StudentData]
 
-
-# ============================================================================
-# GLOBAL MODELS (Preloaded at startup)
-# ============================================================================
-
-ARCFACE_MODEL = None
-RETINAFACE_MODEL = None
-
 # ============================================================================
 # LIFESPAN
 # ============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global ARCFACE_MODEL, RETINAFACE_MODEL
+    global FACENET_MODEL
     
     logger.info("\n" + "="*70)
-    logger.info("🚀 \"AURA\"-Automated Unified Recognition for Attendance Face Recognition API v3.0 (ArcFace Edition)")
+    logger.info("🚀 AURA Face Recognition API v4.0 (Facenet512 Edition)")
     logger.info("="*70)
-    logger.info(f"📡 DeepFace Status: {'✅ AVAILABLE' if DEEPFACE_AVAILABLE else '❌ NOT AVAILABLE'}")
-    logger.info(f"🎯 Threshold (Cosine): {ARCFACE_THRESHOLD} (0-1 scale, higher = stricter)")
-    logger.info(f"📊 Expected Embedding Dimensions: {EXPECTED_EMBEDDING_DIMS}-d")
+    logger.info(f"📡 Model: {MODEL_NAME} (512-d embeddings)")
+    logger.info(f"🔍 Detector: {DETECTOR} (OpenCV)")
+    logger.info(f"🎯 Threshold: {THRESHOLD} (cosine similarity)")
     
-    # ⚡ PRELOAD MODELS AT STARTUP - CRITICAL FOR PERFORMANCE
+    # ⚡ PRELOAD MODEL AT STARTUP
     if DEEPFACE_AVAILABLE:
         try:
-            logger.info("🔥 Preloading ArcFace model (this takes 30-60 seconds)...")
-            ARCFACE_MODEL = DeepFace.build_model("ArcFace")
-            logger.info("✅ ArcFace model preloaded successfully")
-            
-            logger.info("🔥 Preloading RetinaFace detector (this takes 20-40 seconds)...")
-            RETINAFACE_MODEL = DeepFace.build_model("RetinaFace")
-            logger.info("✅ RetinaFace detector preloaded successfully")
-            
-            logger.info("⚡ All models ready - API will respond instantly")
+            logger.info("🔥 Preloading Facenet512 model (this takes 30-60 seconds)...")
+            FACENET_MODEL = DeepFace.build_model(MODEL_NAME)
+            logger.info("✅ Facenet512 model preloaded successfully")
+            logger.info("⚡ Model ready - API will respond instantly on requests")
         except Exception as e:
-            logger.error(f"❌ Failed to preload models: {e}")
+            logger.error(f"❌ Failed to preload model: {e}")
     
     logger.info("="*70 + "\n")
     yield
@@ -147,8 +129,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="\"AURA\"-Automated Unified Recognition for Attendance Face Recognition",
-    version="3.0",
+    title="AURA Face Recognition API",
+    version="4.0",
     lifespan=lifespan
 )
 
@@ -378,35 +360,26 @@ async def health():
     """Health check endpoint"""
     return {
         "status": "OK",
-        "model": "ArcFace (DeepFace)" if DEEPFACE_AVAILABLE else "OpenCV (Fallback)",
-        "deepface_available": DEEPFACE_AVAILABLE,
-        "deepface_error": DEEPFACE_ERROR,
+        "model": MODEL_NAME,
+        "detector": DETECTOR,
+        "threshold": THRESHOLD,
         "loaded_students": len(known_face_names),
         "embedding_dimension": 512,
-        "version": "3.0"
+        "version": "4.0"
     }
 
 
 @app.get("/status")
 async def status():
-    """Get detailed status including loaded students"""
+    """Get detailed status"""
     with lock:
-        faces = []
-        for i in range(len(known_face_names)):
-            faces.append({
-                "id": i,
-                "name": known_face_names[i],
-                "student_id": known_face_ids[i] if i < len(known_face_ids) else "",
-                "embedding_dim": len(known_face_encodings[i]) if i < len(known_face_encodings) else 0
-            })
-        
         return {
             "status": "ready" if known_face_names else "empty",
             "students_loaded": len(known_face_names),
             "embedding_dimension": 512,
-            "threshold": ARCFACE_THRESHOLD,
-            "faces": faces,
-            "deepface_status": "✅ Available" if DEEPFACE_AVAILABLE else "❌ Not Available"
+            "threshold": THRESHOLD,
+            "model": MODEL_NAME,
+            "detector": DETECTOR
         }
 
 
@@ -508,10 +481,9 @@ async def train(req: TrainingRequest):
 
 def process_training_images(images: List[str]) -> List[np.ndarray]:
     """Process images for training (runs in thread executor)"""
-    global ARCFACE_MODEL
     embeddings = []
     
-    # Use preloaded model
+    # Use preloaded Facenet512 model
     for idx, img_b64 in enumerate(images[:50]):
         try:
             rgb = decode_base64(img_b64)
@@ -519,17 +491,14 @@ def process_training_images(images: List[str]) -> List[np.ndarray]:
                 logger.debug(f"Image {idx+1}: Failed to decode")
                 continue
             
-            # ⚡ Resize to 224x224 for FASTER processing without losing ArcFace accuracy
-            rgb = cv2.resize(rgb, (224, 224))
-            
-            # Detect faces with preloaded model (alignment=False for speed)
-            faces = detect_faces_optimized(rgb)
+            # Detect faces with opencv (lightweight, fast)
+            faces = detect_faces_opencv(rgb)
             if not faces:
                 logger.debug(f"Image {idx+1}: No faces detected")
                 continue
             
-            # Get embedding from first face using preloaded ArcFace model
-            emb = get_embedding_optimized(faces[0][0])
+            # Get embedding from first face using preloaded Facenet512 model
+            emb = get_embedding_facenet512(faces[0][0])
             if emb is not None:
                 embeddings.append(normalize_embedding(emb))
             else:
@@ -542,51 +511,52 @@ def process_training_images(images: List[str]) -> List[np.ndarray]:
     return embeddings
 
 
-def detect_faces_optimized(rgb_img: np.ndarray) -> List[tuple]:
-    """Detect faces - optimized with skip_alignment=True"""
-    global RETINAFACE_MODEL
+def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
+    """Detect faces using OpenCV Haar Cascade (lightweight, fast)"""
     results = []
-    
-    if not DEEPFACE_AVAILABLE or RETINAFACE_MODEL is None:
-        return results
-    
     try:
-        face_objs = DeepFace.extract_faces(
-            img_path=rgb_img,
-            detector_backend="retinaface",
-            enforce_detection=False,
-            align=False,  # ⚡ Skip alignment to save CPU time
-            model=RETINAFACE_MODEL  # ⚡ Use preloaded model
+        gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
+        
+        # Detect with lenient parameters for good detection rate
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.05,
+            minNeighbors=3,
+            minSize=(20, 20),
+            flags=cv2.CASCADE_SCALE_IMAGE
         )
         
-        for face_obj in face_objs:
-            face_roi = face_obj.get("face")
-            if face_roi is not None:
-                results.append((face_roi, face_obj.get("facial_area", {})))
+        for (x, y, w, h) in faces:
+            roi = rgb_img[y:y+h, x:x+w]
+            if roi.size > 0:
+                # Facenet512 expects 160x160 input
+                roi_resized = cv2.resize(roi, (160, 160))
+                results.append((roi_resized, (x, y, w, h)))
         
         if results:
             logger.debug(f"✅ Detected {len(results)} face(s)")
+        
+        return results
     except Exception as e:
         logger.debug(f"Face detection error: {e}")
-    
-    return results
+        return []
 
 
-def get_embedding_optimized(face_roi: np.ndarray) -> Optional[np.ndarray]:
-    """Get embedding - optimized with preloaded model"""
-    global ARCFACE_MODEL
+def get_embedding_facenet512(face_roi: np.ndarray) -> Optional[np.ndarray]:
+    """Get embedding using preloaded Facenet512 model"""
+    global FACENET_MODEL
     
-    if not DEEPFACE_AVAILABLE or ARCFACE_MODEL is None:
+    if not DEEPFACE_AVAILABLE or FACENET_MODEL is None:
         return None
     
     try:
-        # Use preloaded ArcFace model
+        # Use preloaded Facenet512 model for faster processing
         embedding_objs = DeepFace.represent(
             img_path=face_roi,
-            model_name="ArcFace",
+            model_name=MODEL_NAME,
             enforce_detection=False,
-            model=ARCFACE_MODEL,  # ⚡ Use preloaded model
-            align=False  # ⚡ Skip alignment
+            model=FACENET_MODEL,  # Use preloaded model
+            align=False  # Skip alignment for speed
         )
         
         if embedding_objs and len(embedding_objs) > 0:
@@ -623,8 +593,8 @@ async def recognize(req: RecognitionRequest):
             
             logger.debug(f"✅ Image decoded: {rgb.shape}")
             
-            # ⚡ Detect faces with optimized model (skip alignment)
-            faces = detect_faces_optimized(rgb)
+            # Detect faces using opencv
+            faces = detect_faces_opencv(rgb)
             if not faces:
                 logger.debug("ℹ️ No faces detected")
                 return {
@@ -637,11 +607,11 @@ async def recognize(req: RecognitionRequest):
             logger.info(f"👤 Detected {len(faces)} face(s)")
             results = []
             
-            # Process each face - OPTIMIZED FOR SPEED & ACCURACY
+            # Process each face
             for idx, (face_roi, box) in enumerate(faces):
                 try:
-                    # ⚡ Get embedding with preloaded model
-                    emb = get_embedding_optimized(face_roi)
+                    # Get embedding with preloaded Facenet512 model
+                    emb = get_embedding_facenet512(face_roi)
                     if emb is None:
                         logger.debug(f"Face {idx+1}: Failed to get embedding")
                         continue
@@ -671,7 +641,7 @@ async def recognize(req: RecognitionRequest):
                         logger.debug(f"Face {idx+1}: No valid match")
                         continue
                     
-                    recognized = max_similarity >= ARCFACE_THRESHOLD
+                    recognized = max_similarity >= THRESHOLD
                     distance = float(1.0 - max_similarity)
                     
                     result = {
@@ -687,9 +657,9 @@ async def recognize(req: RecognitionRequest):
                     results.append(result)
                     
                     if recognized:
-                        logger.info(f"✅ MATCHED - {known_face_names[best_idx]} (sim: {max_similarity:.3f})\"")
+                        logger.info(f"✅ MATCHED - {known_face_names[best_idx]} (sim: {max_similarity:.3f})")
                     else:
-                        logger.debug(f"ℹ️ Close match - {known_face_names[best_idx]} but below threshold ({max_similarity:.3f} < {ARCFACE_THRESHOLD})\"")
+                        logger.debug(f"ℹ️ Close match - {known_face_names[best_idx]} ({max_similarity:.3f} < {THRESHOLD})")
                         
                 except Exception as e:
                     logger.error(f"Face {idx+1}: {e}")
@@ -751,8 +721,6 @@ async def test_detection(req: RecognitionRequest):
     except Exception as e:
         logger.error(f"❌ Detection test error: {e}")
         return {"success": False, "error": str(e)}
-
-
 # ============================================================================
 # STARTUP
 # ============================================================================
@@ -761,7 +729,7 @@ if __name__ == "__main__":
     import uvicorn
     
     print("\n" + "="*70)
-    print("Starting \"AURA\"-Automated Unified Recognition for Attendance Face Recognition API v3.0")
+    print("Starting AURA Face Recognition API v4.0")
     print("="*70)
     print("📍 Address: http://0.0.0.0:8000")
     print("📚 Docs: http://localhost:8000/docs")
