@@ -201,10 +201,10 @@ export default function LiveAttendance() {
       console.log(`📥 Loading ${studentsForAPI.length} students to Python API (accepting ${validSizes.join('/')}d embeddings)`)
       
       if (studentsForAPI.length === 0) {
-        const embeddingSizes = students
-          .filter(s => s.faceEmbeddings)
-          .map(s => `${s.name}: ${s.faceEmbeddings.length}d`)
-          .join(', ') || 'No embeddings found'
+       const embeddingSizes = students
+  .filter((s) => Array.isArray(s.faceEmbeddings))
+  .map((s) => `${s.name}: ${s.faceEmbeddings!.length}d`)
+  .join(', ') || 'No embeddings found'
         throw new Error(`No valid embeddings found. Found: ${embeddingSizes} (valid: ${validSizes.join('/')}d)`)
       }
       

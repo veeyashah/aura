@@ -21,30 +21,20 @@
       "static/chunks/main-app.js",
       "static/chunks/app/admin/dashboard/page.js"
     ],
-    "/admin/register/page": [
+    "/admin/faculty/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/register/page.js"
+      "static/chunks/app/admin/faculty/page.js"
     ],
     "/admin/students/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/admin/students/page.js"
     ],
-    "/admin/students/[id]/training/page": [
+    "/admin/register/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/admin/students/[id]/training/page.js"
-    ],
-    "/admin/faculty/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/faculty/page.js"
-    ],
-    "/admin/timetable/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/admin/timetable/page.js"
+      "static/chunks/app/admin/register/page.js"
     ],
     "/faculty/dashboard/page": [
       "static/chunks/webpack.js",
@@ -55,6 +45,16 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/faculty/live-attendance/page.js"
+    ],
+    "/faculty/timetable/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/faculty/timetable/page.js"
+    ],
+    "/faculty/export/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/faculty/export/page.js"
     ]
   }
 }
