@@ -193,7 +193,7 @@ export default function TestFace() {
             {apiConnected ? '✅ Python API Connected' : 'Connect to Python API'}
           </button>
           <p className="text-sm text-gray-600 mt-2">
-            Make sure the Python Face Recognition API is running on http://localhost:8000
+            Make sure the Python Face Recognition API is running on {process.env.NEXT_PUBLIC_PYTHON_API_URL || 'http://localhost:8000'}
           </p>
         </div>
 

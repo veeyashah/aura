@@ -1,7 +1,7 @@
 // Python Face Recognition API integration
-const PYTHON_API_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost' 
-  ? 'http://localhost:8000' 
-  : 'http://192.168.29.53:8000'
+const PYTHON_API_URL = typeof window !== 'undefined' 
+  ? (process.env.NEXT_PUBLIC_FACE_API_URL || 'http://localhost:8000')
+  : 'http://localhost:8000'
 
 // Helper: Compress image to smaller size
 export const compressImageBase64 = (imageBase64: string, quality: number = 0.6): string => {

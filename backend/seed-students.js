@@ -17,8 +17,6 @@ async function seedStudents() {
     const studentsData = [
       { studentId: 'A015', name: 'Dhriti Panchal', email: 'dhriti@example.com', year: 'FY', batch: 'B1', rollNumber: 'A015' },
       { studentId: 'A024', name: 'Veeya Shah', email: 'veeya@example.com', year: 'FY', batch: 'B2', rollNumber: 'A024' },
-      { studentId: 'A025', name: 'Rahul Sharma', email: 'rahul@example.com', year: 'FY', batch: 'B1', rollNumber: 'A025' },
-      { studentId: 'A026', name: 'Priya Singh', email: 'priya@example.com', year: 'FY', batch: 'B2', rollNumber: 'A026' },
     ];
 
     const hashedPassword = await bcrypt.hash('password123', 10);
