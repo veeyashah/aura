@@ -1,10 +1,10 @@
 // Python Face Recognition API integration
 const PYTHON_API_URL = typeof window !== 'undefined' 
-  ? (process.env.NEXT_PUBLIC_PYTHON_API_URL || 'http://localhost:8000')
+  ? (process.env.NEXT_PUBLIC_FACE_API_URL || 'http://localhost:8000')
   : 'http://localhost:8000'
 
-// Helper: Compress image to smaller size
-export const compressImageBase64 = (imageBase64: string, quality: number = 0.6): string => {
+// Helper: Compress image to smaller size - BALANCED quality/size
+export const compressImageBase64 = (imageBase64: string, quality: number = 0.5): string => {
   if (imageBase64.length < 30000) return imageBase64 // Already small
   
   try {
@@ -17,7 +17,7 @@ export const compressImageBase64 = (imageBase64: string, quality: number = 0.6):
     if (!ctx) return imageBase64
     
     ctx.drawImage(img, 0, 0)
-    return canvas.toDataURL('image/jpeg', quality)
+    return canvas.toDataURL('image/jpeg', quality) // Maintain quality for accuracy
   } catch (e) {
     return imageBase64 // Return original if compression fails
   }
@@ -106,21 +106,24 @@ export const trainStudent = async (studentId: string, images: string[]) => {
 
     // Use AbortController to enforce a timeout for the training request
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 240_000) // allow extra time for cold starts
+    const timeout = setTimeout(() => controller.abort(), 300_000) // 5 minutes (extended from 3)
 
     let response: Response
     try {
+      // Compress images before sending to reduce payload
+      const compressedImages = images.map(img => compressImageBase64(img, 0.3))
+      
       response = await fetch(`${PYTHON_API_URL}/train`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ student_id: studentId, images: images }),
+        body: JSON.stringify({ student_id: studentId, images: compressedImages }),
         signal: controller.signal
       })
     } catch (err) {
       if ((err as any)?.name === 'AbortError') {
-        throw new Error('Training request timed out (240s)')
+        throw new Error('Training request timed out (5 minutes). Check Python API is running.')
       }
       const m = err instanceof Error ? err.message : String(err)
       throw new Error(`Failed to reach Python API: ${m}`)

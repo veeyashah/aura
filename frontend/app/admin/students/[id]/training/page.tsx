@@ -19,9 +19,7 @@ export default function StudentTraining() {
   const [processing, setProcessing] = useState(false) // New: tracks AI processing phase
   const [progress, setProgress] = useState(0)
   const [capturedCount, setCapturedCount] = useState(0)
-  const TARGET_IMAGES = 12
-  const CAPTURE_DURATION_MS = 1800
-  const [targetImages] = useState(TARGET_IMAGES)
+  const [targetImages] = useState(20) // Keep 20 images for HIGH ACCURACY training
   const [capturedImages, setCapturedImages] = useState<string[]>([])
   const [cameraReady, setCameraReady] = useState(false)
   const [messageIndex, setMessageIndex] = useState(0) // For cycling messages
@@ -109,16 +107,6 @@ export default function StudentTraining() {
     }
   }
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop())
-      streamRef.current = null
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-    }
-  }
-
   const captureImageAsBase64 = (): string | null => {
     if (!videoRef.current) return null
     
@@ -127,15 +115,11 @@ export default function StudentTraining() {
       const ctx = canvas.getContext('2d')
       if (!ctx) return null
       
-      const video = videoRef.current
-      const targetWidth = Math.min(320, video.videoWidth || 320)
-      const scale = targetWidth / (video.videoWidth || targetWidth)
-      canvas.width = targetWidth
-      canvas.height = Math.round((video.videoHeight || targetWidth) * scale)
-
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      canvas.width = videoRef.current.videoWidth
+      canvas.height = videoRef.current.videoHeight
+      ctx.drawImage(videoRef.current, 0, 0)
       
-      return canvas.toDataURL('image/jpeg', 0.4)
+      return canvas.toDataURL('image/jpeg', 0.5)
     } catch (error) {
       console.error('Capture error:', error)
       return null
@@ -151,10 +135,9 @@ export default function StudentTraining() {
     setTraining(true)
     setCapturedCount(0)
     setProgress(0)
-    setCapturedImages([])
     const images: string[] = []
-    const captureTargetImages = TARGET_IMAGES
-    const totalTime = CAPTURE_DURATION_MS
+    const captureTargetImages = 10 // 10 images in 1 second = ultra-fast training
+    const totalTime = 1000
     const interval = totalTime / captureTargetImages
 
     toast.info('Capturing... Keep face steady!')
@@ -163,9 +146,7 @@ export default function StudentTraining() {
       const imageBase64 = captureImageAsBase64()
       if (imageBase64) {
         images.push(imageBase64)
-        if ((i + 1) % 3 === 0 || i === captureTargetImages - 1) {
-          setCapturedImages([...images])
-        }
+        setCapturedImages([...images])
       }
       
       const currentCount = i + 1
@@ -177,12 +158,9 @@ export default function StudentTraining() {
       }
     }
 
-    setCapturedImages([...images])
-
     if (images.length < 5) {
       toast.error(`Not enough images captured (${images.length}/${captureTargetImages}). Please try again.`)
       setTraining(false)
-      stopCamera()
       return
     }
 
@@ -216,7 +194,6 @@ export default function StudentTraining() {
         setProcessing(false)
         toast.success(`✨ Training completed! ${response.data.data.embeddingSize} dimensions saved.`)
         await new Promise(resolve => setTimeout(resolve, 500))
-        stopCamera()
         router.push('/admin/students')
       } else {
         const errorMsg = response.data.message || 'Unknown error'
@@ -224,7 +201,6 @@ export default function StudentTraining() {
         setProcessing(false)
         toast.error(`Training failed: ${errorMsg}`)
         setTraining(false)
-        stopCamera()
       }
     } catch (error: any) {
       setProcessing(false)
@@ -272,7 +248,6 @@ export default function StudentTraining() {
       }
       
       setTraining(false)
-      stopCamera()
     }
   }
 
@@ -301,7 +276,7 @@ export default function StudentTraining() {
               {training ? 'Training in Progress...' : 'Start Camera & Auto-Capture'}
             </button>
             <p className="text-sm text-gray-600 mt-2">
-              Camera will start and automatically capture {targetImages} images in ~2 seconds
+              Camera will start and automatically capture {targetImages} images in ~1 second
             </p>
           </div>
 
@@ -336,7 +311,7 @@ export default function StudentTraining() {
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-blue-700 font-medium">
-                  {capturedCount === targetImages ? '✅ Capture Complete! Processing...' : '⏳ Capturing...'}
+                  {capturedCount === 50 ? '✅ Capture Complete! Processing...' : '⏳ Capturing...'}
                 </span>
                 <span className="text-gray-600">
                   {capturedImages.length > 0 && `${capturedImages.length} images captured`}

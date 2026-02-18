@@ -234,7 +234,7 @@ export default function LiveAttendance() {
         );
       }
 
-      const apiUrl = process.env.NEXT_PUBLIC_PYTHON_API_URL || "http://localhost:8000";
+      const apiUrl = process.env.NEXT_PUBLIC_FACE_API_URL || "http://localhost:8000";
 
       const loadResponse = await fetch(`${apiUrl}/load-students`, {
         method: "POST",
@@ -327,8 +327,8 @@ export default function LiveAttendance() {
         }
 
         tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-        // Use 0.65 quality for recognition (original working)
-        const imageData = tempCanvas.toDataURL("image/jpeg", 0.65);
+        // Use 0.6 quality for ACCURATE recognition with decent compression
+        const imageData = tempCanvas.toDataURL("image/jpeg", 0.6);
 
         const apiUrl = process.env.NEXT_PUBLIC_PYTHON_API_URL || "http://localhost:8000";
 
@@ -368,7 +368,7 @@ export default function LiveAttendance() {
           console.error("Error stack:", error.stack);
         }
       }
-    }, 1000); // Process every 1 second
+    }, 800); // Process every 0.8 seconds (optimized from 1s)
 
     console.log("✅ Frame processing interval set (every 1s)");
   };

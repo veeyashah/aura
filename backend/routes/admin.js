@@ -157,6 +157,7 @@ router.get('/students/:id', async (req, res) => {
 
 /**
  * POST /api/admin/students/:id/training
+ * Save training embeddings - OPTIMIZED for speed
  */
 router.post('/students/:id/training', async (req, res) => {
   try {
@@ -166,39 +167,48 @@ router.post('/students/:id/training', async (req, res) => {
       return res.status(400).json({ message: 'Invalid embeddings' });
     }
 
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      {
-        faceEmbeddings,
-        isTrained: true,
-        lastTrainedDate: new Date()
-      },
-      { new: true }
-    );
-
+    // Get user first to get studentId
+    const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ message: 'Student not found' });
     }
 
-    await FaceEnrollment.findOneAndUpdate(
-      { studentId: user.studentId },
-      {
-        studentId: user.studentId,
-        faceEmbeddings,
-        status: 'enrolled',
-        enrollmentDate: new Date()
-      },
-      { upsert: true }
-    );
+    // Parallel update: User embeddings + FaceEnrollment (both fast)
+    await Promise.all([
+      // Update User with embeddings
+      User.updateOne(
+        { _id: req.params.id },
+        {
+          $set: {
+            faceEmbeddings,
+            isTrained: true,
+            lastTrainedDate: new Date()
+          }
+        }
+      ),
+      // Update FaceEnrollment with embeddings
+      FaceEnrollment.updateOne(
+        { studentId: user.studentId },
+        {
+          $set: {
+            studentId: user.studentId,
+            faceEmbeddings,
+            status: 'enrolled',
+            enrollmentDate: new Date()
+          }
+        },
+        { upsert: true }
+      )
+    ]);
 
     res.json({
       success: true,
-      message: 'Student training completed',
+      message: 'Student training completed successfully',
       data: {
         studentId: user.studentId,
         name: user.name,
-        isTrained: user.isTrained,
-        embeddingSize: user.faceEmbeddings.length
+        isTrained: true,
+        embeddingSize: faceEmbeddings.length
       }
     });
 

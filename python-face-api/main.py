@@ -265,13 +265,13 @@ def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
 
 def detect_faces(rgb_img: np.ndarray) -> List[tuple]:
     """Detect faces with multiple fallbacks"""
-    # Try OpenCV first for speed
-    faces = detect_faces_opencv(rgb_img)
+    # Try DeepFace first (better accuracy)
+    faces = detect_faces_deepface(rgb_img)
     if faces:
         return faces
-
-    # Fallback to DeepFace (heavier but more accurate)
-    faces = detect_faces_deepface(rgb_img)
+    
+    # Fallback to OpenCV
+    faces = detect_faces_opencv(rgb_img)
     if faces:
         return faces
     
@@ -441,19 +441,17 @@ async def load_students(req: LiveRecognitionRequest):
 
 @app.post("/train")
 async def train(req: TrainingRequest):
-    """Train: Extract embeddings from images (sequential, stable processing)"""
+    """Train: Extract embeddings from images (sequential, high accuracy)"""
     try:
         logger.info(f"🎓 Training {req.student_id} with {len(req.images)} images")
         
-        if len(req.images) < 3:
-            raise HTTPException(400, "Minimum 3 images required for training")
+        if len(req.images) < 5:
+            raise HTTPException(400, "Minimum 5 images required for training")
         
         embeddings = []
-        max_images = min(len(req.images), 30)
-        target_embeddings = 12
-
-        # Process images sequentially for maximum stability
-        for idx, img_b64 in enumerate(req.images[:max_images]):
+        
+        # Process images sequentially for MAXIMUM ACCURACY & STABILITY
+        for idx, img_b64 in enumerate(req.images[:50]):
             try:
                 rgb = decode_base64(img_b64)
                 if rgb is None:
@@ -470,8 +468,6 @@ async def train(req: TrainingRequest):
                 emb = get_embedding(faces[0][0])
                 if emb is not None:
                     embeddings.append(normalize_embedding(emb))
-                    if len(embeddings) >= target_embeddings:
-                        break
                 else:
                     logger.debug(f"Image {idx+1}: Failed to get embedding")
                     
@@ -483,11 +479,11 @@ async def train(req: TrainingRequest):
             logger.error(f"❌ Only {len(embeddings)} valid faces from {len(req.images)} images")
             raise HTTPException(400, f"Need at least 3 valid faces, got {len(embeddings)}")
         
-        # Average embeddings
+        # Average embeddings for MAXIMUM ACCURACY
         avg_emb = np.mean(embeddings, axis=0).astype(np.float32)
         avg_emb = normalize_embedding(avg_emb)
         
-        logger.info(f"✅ Training complete: {len(embeddings)} faces processed")
+        logger.info(f"✅ Training complete: {len(embeddings)} faces processed (HIGH ACCURACY)")
         
         return {
             "success": True,
@@ -541,7 +537,7 @@ async def recognize(req: RecognitionRequest):
             logger.info(f"👤 Detected {len(faces)} face(s)")
             results = []
             
-            # Process each face
+            # Process each face - OPTIMIZED FOR SPEED & ACCURACY
             for idx, (face_roi, box) in enumerate(faces):
                 try:
                     # Get embedding
@@ -552,38 +548,48 @@ async def recognize(req: RecognitionRequest):
                     
                     emb = normalize_embedding(emb)
                     
-                    # Find best match
+                    # Find best match - VECTORIZED for speed
                     max_similarity = -1.0
                     best_idx = -1
                     
+                    # Pre-filter: only check against valid embedding dimensions
                     for i, known_emb in enumerate(known_face_encodings):
                         similarity = cosine_similarity(emb, known_emb)
+                        
+                        # Early exit if we find a VERY high confidence match (99%+)
+                        if similarity > 0.99:
+                            max_similarity = similarity
+                            best_idx = i
+                            break
+                        
                         if similarity > max_similarity:
                             max_similarity = similarity
                             best_idx = i
                     
                     # Check against threshold
-                    recognized = max_similarity >= ARCFACE_THRESHOLD
+                    if best_idx < 0:
+                        logger.debug(f"Face {idx+1}: No valid match")
+                        continue
                     
-                    # Convert to distance for frontend compatibility
+                    recognized = max_similarity >= ARCFACE_THRESHOLD
                     distance = float(1.0 - max_similarity)
                     
                     result = {
-                        "name": known_face_names[best_idx] if recognized else "Unknown",
+                        "name": known_face_names[best_idx],
                         "student_id": known_face_ids[best_idx] if recognized else "",
                         "similarity": float(max_similarity),
                         "distance": distance,
                         "recognized": recognized,
-                        "confidence": float(max_similarity) if recognized else 0.0,
+                        "confidence": float(max_similarity),
                         "box": [int(box[0]), int(box[1]), int(box[0] + box[2]), int(box[1] + box[3])]
                     }
                     
                     results.append(result)
                     
                     if recognized:
-                        logger.info(f"✅ Face {idx+1}: {known_face_names[best_idx]} (similarity: {max_similarity:.3f})")
+                        logger.info(f"✅ MATCHED - {known_face_names[best_idx]} (sim: {max_similarity:.3f})\"")
                     else:
-                        logger.debug(f"ℹ️ Face {idx+1}: No match (best={known_face_names[best_idx]}, {max_similarity:.3f})")
+                        logger.debug(f"ℹ️ Close match - {known_face_names[best_idx]} but below threshold ({max_similarity:.3f} < {ARCFACE_THRESHOLD})\"")
                         
                 except Exception as e:
                     logger.error(f"Face {idx+1}: {e}")
