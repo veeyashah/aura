@@ -12,8 +12,8 @@ export default function Splash() {
       setIsTransitioning(true)
       setTimeout(() => {
         router.push('/login')
-      }, 800) // Wait for fade out animation
-    }, 3000) // Show splash for 3 seconds
+      }, 1000) // Wait for fade out animation
+    }, 5000) // Show splash for 5 seconds
 
     return () => clearTimeout(timer)
   }, [router])
