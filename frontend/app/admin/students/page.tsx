@@ -355,8 +355,7 @@ export default function StudentsList() {
                     style={{ letterSpacing: "0.1em" }}
                   />
                   <p className="text-xs text-gray-500 mt-2 text-center">
-                    2-5 characters • Will be converted to Vladimir Script font
-                    automatically
+                    2-5 characters
                   </p>
                 </div>
 

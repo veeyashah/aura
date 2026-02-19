@@ -136,14 +136,14 @@ export default function Login() {
 
           {/* Footer Info */}
           <div className="mt-8 pt-6 border-t border-white/10">
-            <p>© 2026 AURA – Smart Attendance System</p>
-            <p>
+            <p className="text-pink-200">© 2026 AURA – Smart Attendance System</p>
+            <p className="text-pink-200">
               Designed & Developed by
               <a
                 href="https://github.com/veeyashah"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-purple-400 hover:underline ml-1"
+                className="text-purple-400 hover:text-white transition-colors ml-1"
               >
                 Veeya Shah
               </a>
