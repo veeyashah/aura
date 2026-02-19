@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.10-slim-bullseye
 
 WORKDIR /app
 
@@ -6,22 +6,26 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies for dlib and face_recognition
+# Install minimal system dependencies (dlib pre-compiled, no build needed)
 RUN apt-get update && apt-get install -y \
     build-essential \
-    cmake \
     libopenblas-dev \
     liblapack-dev \
-    libx11-dev \
-    libgtk-3-dev \
-    libboost-python-dev \
+    libx11-6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt && \
-    pip cache purge
+# Install pre-compiled dlib binary (no compilation needed)
+RUN pip install --upgrade pip setuptools wheel
+
+RUN pip install dlib==19.24.2 --extra-index-url https://pypi.org/simple/
+
+RUN pip install face_recognition==1.3.0
+
+RUN pip install fastapi==0.104.1 uvicorn==0.24.0 python-multipart==0.0.6 numpy==1.24.3 Pillow==10.0.0 pymongo==4.6.0 python-dotenv==1.0.0
+
+RUN pip cache purge
 
 COPY . .
 
