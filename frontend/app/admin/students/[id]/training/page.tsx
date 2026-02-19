@@ -18,6 +18,8 @@ export default function StudentTraining() {
   const [training, setTraining] = useState(false)
   const [processing, setProcessing] = useState(false) // New: tracks AI processing phase
   const [progress, setProgress] = useState(0)
+  const [processingProgress, setProcessingProgress] = useState(0) // New: actual processing progress (0-100%)
+  const [processingStartTime, setProcessingStartTime] = useState<number | null>(null) // New: track start time
   const [capturedCount, setCapturedCount] = useState(0)
   const [targetImages] = useState(20) // Keep 20 images for HIGH ACCURACY training
   const [capturedImages, setCapturedImages] = useState<string[]>([])
@@ -55,6 +57,65 @@ export default function StudentTraining() {
     
     return () => clearInterval(interval)
   }, [processing, processingMessages.length])
+
+  // Simulate realistic processing progress (45-60s typical backend training)
+  useEffect(() => {
+    if (!processing) return
+    
+    // Record start time on first render of processing state
+    if (processingStartTime === null) {
+      setProcessingStartTime(Date.now())
+      setProcessingProgress(2) // Start at 2%
+      return
+    }
+
+    // Update progress every 400ms
+    const progressInterval = setInterval(() => {
+      const elapsed = (Date.now() - processingStartTime) / 1000 // in seconds
+      const estimatedTotal = 50 // Assume ~50 seconds typical processing
+      
+      // Smooth curve: cubic ease-in-out style progress
+      // Front-loads progress early, then slows down near the end
+      let newProgress: number
+      if (elapsed < estimatedTotal * 0.3) {
+        // First 30% of time: fast progress (0-25%)
+        newProgress = 2 + (elapsed / (estimatedTotal * 0.3)) * 23
+      } else if (elapsed < estimatedTotal * 0.7) {
+        // Next 40% of time: steady progress (25-75%)
+        newProgress = 25 + ((elapsed - estimatedTotal * 0.3) / (estimatedTotal * 0.4)) * 50
+      } else if (elapsed < estimatedTotal) {
+        // Final 30% of time: slower progress (75-95%)
+        newProgress = 75 + ((elapsed - estimatedTotal * 0.7) / (estimatedTotal * 0.3)) * 20
+      } else {
+        // At or past estimated time: cap at 95% (will jump to 100% when done)
+        newProgress = 95
+      }
+      
+      setProcessingProgress(Math.min(Math.round(newProgress), 95))
+    }, 400)
+
+    return () => clearInterval(progressInterval)
+  }, [processing, processingStartTime])
+
+  // Helper function to get processing stage label
+  const getProcessingStage = (percent: number): string => {
+    if (percent < 20) return 'Uploading images...'
+    if (percent < 40) return 'Detecting faces...'
+    if (percent < 60) return 'Computing embeddings...'
+    if (percent < 80) return 'Averaging features...'
+    if (percent < 95) return 'Verifying accuracy...'
+    return 'Finalizing...'
+  }
+
+  // Helper function to estimate time remaining
+  const getTimeRemaining = (percent: number): string => {
+    const estimatedTotal = 50 // seconds
+    if (percent >= 95) return 'Almost done!'
+    const remaining = Math.ceil(((100 - percent) / percent) * ((processingStartTime ? (Date.now() - processingStartTime) / 1000 : 0)))
+    if (remaining <= 0) return 'Finishing...'
+    if (remaining > 60) return `~${Math.ceil(remaining / 60)}m remaining`
+    return `~${remaining}s remaining`
+  }
 
   const fetchStudent = async () => {
     try {
@@ -166,6 +227,8 @@ export default function StudentTraining() {
 
     // Start processing phase - show loading modal
     setProcessing(true)
+    setProcessingProgress(2) // Start at 2%
+    setProcessingStartTime(null) // Will be set in useEffect
     setMessageIndex(0)
 
     try {
@@ -191,6 +254,7 @@ export default function StudentTraining() {
       
       if (response.data.success) {
         console.log('✅ Training successful!')
+        setProcessingProgress(100) // Jump to 100%
         setProcessing(false)
         toast.success(`✨ Training completed! ${response.data.data.embeddingSize} dimensions saved.`)
         await new Promise(resolve => setTimeout(resolve, 500))
@@ -199,11 +263,13 @@ export default function StudentTraining() {
         const errorMsg = response.data.message || 'Unknown error'
         console.error('❌ Training response not successful:', errorMsg)
         setProcessing(false)
+        setProcessingProgress(0)
         toast.error(`Training failed: ${errorMsg}`)
         setTraining(false)
       }
     } catch (error: any) {
       setProcessing(false)
+      setProcessingProgress(0)
       console.error('❌ Training error caught:', error)
       
       // Ensure we have a string message
@@ -338,21 +404,47 @@ export default function StudentTraining() {
                     <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full animate-pulse shadow-lg"></div>
                   </div>
 
-                  {/* Center icon */}
+                  {/* Center percentage */}
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-3xl">🧠</span>
+                    <span className="text-3xl font-bold text-blue-600">{processingProgress}%</span>
                   </div>
                 </div>
               </div>
 
               {/* Engaging Message */}
               <div className="text-center mb-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                <h2 className="text-2xl font-bold text-gray-800 mb-2">
                   Training in Progress...
                 </h2>
                 <p className="text-lg text-purple-600 font-medium h-8 transition-all duration-500">
                   {processingMessages[messageIndex]}
                 </p>
+              </div>
+
+              {/* Progress Bar Section */}
+              <div className="mb-6">
+                {/* Linear Progress Bar */}
+                <div className="w-full bg-gray-200 rounded-full h-4 mb-3 shadow-inner overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 h-4 rounded-full transition-all duration-300 ease-out"
+                    style={{ width: `${processingProgress}%` }}
+                  />
+                </div>
+
+                {/* Progress Info Row */}
+                <div className="flex justify-between items-center px-1">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-blue-600 uppercase tracking-wide">
+                      {getProcessingStage(processingProgress)}
+                    </span>
+                    <span className="text-xs text-gray-500 mt-1">
+                      {getTimeRemaining(processingProgress)}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-lg font-bold text-blue-700">{processingProgress}%</span>
+                  </div>
+                </div>
               </div>
 
               {/* Progress Dots */}
