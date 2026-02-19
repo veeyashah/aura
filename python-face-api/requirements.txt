@@ -7,3 +7,4 @@ numpy
 scipy
 tf-keras
 gunicorn
+psutil

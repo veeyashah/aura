@@ -25,6 +25,37 @@ from datetime import datetime
 import threading
 import json
 import asyncio
+import gc
+
+# Optional memory monitoring
+PSUTIL_AVAILABLE = False
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    pass
+
+
+# ============================================================================
+# MEMORY MONITORING
+# ============================================================================
+
+def get_memory_usage():
+    """Get current memory usage in MB (returns 0 if psutil unavailable)"""
+    if not PSUTIL_AVAILABLE:
+        return 0
+    try:
+        process = psutil.Process()
+        return process.memory_info().rss / 1024 / 1024  # Convert to MB
+    except:
+        return 0
+
+def log_memory_checkpoint(label: str):
+    """Log memory usage at a checkpoint"""
+    mem_mb = get_memory_usage()
+    if mem_mb > 0:
+        logger.info(f"💾 {label}: {mem_mb:.1f} MB")
+    return mem_mb
 
 
 # ============================================================================
@@ -130,31 +161,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-
-# ============================================================================
-# DATA MODELS
-# ============================================================================
-
-class TrainingRequest(BaseModel):
-    student_id: str
-    images: List[str]
-
-
-class RecognitionRequest(BaseModel):
-    image: str
-
-
-class StudentData(BaseModel):
-    studentId: str
-    name: str
-    faceEmbeddings: List[float]
-
-
-class LiveRecognitionRequest(BaseModel):
-    students: List[StudentData]
-
-
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
@@ -180,67 +186,16 @@ def decode_base64(b64_str: str) -> Optional[np.ndarray]:
         return None
 
 
-def detect_faces_deepface(rgb_img: np.ndarray) -> List[tuple]:
-    """Detect faces using DeepFace with single best detector"""
-    results = []
-    
-    if not DEEPFACE_AVAILABLE:
-        return results
-    
-    try:
-        # Use only RetinaFace (best accuracy/speed tradeoff) - skip other detectors for speed
-        detector_name = 'retinaface'
-        
-        try:
-            # Extract faces using DeepFace
-            face_objs = DeepFace.extract_faces(
-                img_path=rgb_img,
-                detector_backend=detector_name,
-                enforce_detection=False,
-                align=True
-            )
-            
-            if face_objs and len(face_objs) > 0:
-                logger.debug(f"✅ {detector_name} detected {len(face_objs)} face(s)")
-                
-                for face_obj in face_objs:
-                    facial_area = face_obj.get('facial_area', {})
-                    x = facial_area.get('x', 0)
-                    y = facial_area.get('y', 0)
-                    w = facial_area.get('w', 0)
-                    h = facial_area.get('h', 0)
-                    
-                    face_img = face_obj.get('face')
-                    
-                    if face_img is not None and face_img.size > 0:
-                        if face_img.dtype != np.uint8:
-                            face_img = (face_img * 255).astype(np.uint8)
-                        
-                        # ArcFace expects 224x224
-                        face_resized = cv2.resize(face_img, (224, 224))
-                        results.append((face_resized, (x, y, w, h)))
-                
-                if results:
-                    return results
-                    
-        except Exception as e:
-            logger.debug(f"⚠️ RetinaFace failed: {str(e)[:100]}")
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"❌ DeepFace detection error: {e}")
-        return []
+
 
 
 def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
-    """Detect faces using OpenCV Haar Cascade (fallback)"""
+    """Detect faces using OpenCV Haar Cascade (memory-optimized)"""
     results = []
     try:
-        logger.debug("🔄 Falling back to OpenCV Haar Cascade...")
         gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
         
-        # Lenient parameters for detection
+        # Optimized parameters for low-memory detection
         faces = face_cascade.detectMultiScale(
             gray,
             scaleFactor=1.05,
@@ -252,70 +207,25 @@ def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
         for (x, y, w, h) in faces:
             roi = rgb_img[y:y+h, x:x+w]
             if roi.size > 0:
-                roi_resized = cv2.resize(roi, (224, 224))
+                # Facenet expects 160x160 to save memory
+                roi_resized = cv2.resize(roi, (160, 160))
                 results.append((roi_resized, (x, y, w, h)))
         
         if results:
-            logger.info(f"✅ OpenCV detected {len(results)} face(s)")
+            logger.debug(f"✅ OpenCV detected {len(results)} face(s)")
             
         return results
     except Exception as e:
-        logger.debug(f"⚠️ OpenCV failed: {e}")
+        logger.debug(f"Face detection error: {e}")
         return []
 
 
 def detect_faces(rgb_img: np.ndarray) -> List[tuple]:
-    """Detect faces with multiple fallbacks"""
-    # Try DeepFace first (better accuracy)
-    faces = detect_faces_deepface(rgb_img)
-    if faces:
-        return faces
-    
-    # Fallback to OpenCV
-    faces = detect_faces_opencv(rgb_img)
-    if faces:
-        return faces
-    
-    logger.warning("⚠️ No faces detected by any method")
-    return []
+    """Detect faces using OpenCV only (memory-efficient for Render free tier)"""
+    return detect_faces_opencv(rgb_img)
 
 
-def get_embedding_deepface(face_roi: np.ndarray) -> Optional[np.ndarray]:
-    """Get embedding using DeepFace ArcFace model"""
-    try:
-        if not DEEPFACE_AVAILABLE:
-            logger.warning("⚠️ DeepFace not available")
-            return None
-        
-        # ArcFace provides 512-d embeddings with superior accuracy
-        result = DeepFace.represent(
-            face_roi,
-            model_name="ArcFace",
-            enforce_detection=False,
-            normalization="ArcFace"
-        )
-        
-        if result and len(result) > 0:
-            embedding = np.array(result[0]["embedding"], dtype=np.float32)
-            logger.debug(f"✅ ArcFace embedding: {len(embedding)}-d")
-            return embedding
-        
-        logger.warning("⚠️ DeepFace returned empty result")
-        return None
-        
-    except Exception as e:
-        logger.error(f"❌ DeepFace embedding error: {e}")
-        return None
 
-
-def get_embedding(face_roi: np.ndarray) -> Optional[np.ndarray]:
-    """Get embedding with fallbacks"""
-    emb = get_embedding_deepface(face_roi)
-    if emb is not None:
-        return emb
-    
-    logger.warning("⚠️ Could not generate embedding")
-    return None
 
 
 def normalize_embedding(emb: np.ndarray) -> np.ndarray:
@@ -433,31 +343,45 @@ async def load_students(req: LiveRecognitionRequest):
 
 @app.post("/train")
 async def train(req: TrainingRequest):
-    """Train: Extract embeddings from images (OPTIMIZED - async, high accuracy)"""
+    """Train: Extract embeddings from images (Memory-optimized for Render)"""
     try:
+        mem_start = log_memory_checkpoint(f"Training START ({req.student_id})")
         logger.info(f"🎓 Training {req.student_id} with {len(req.images)} images")
         
-        if len(req.images) < 5:
+        # Limit images to 5 for memory efficiency on free tier
+        images_to_use = req.images[:5]
+        if len(req.images) > 5:
+            logger.warning(f"⚠️ Limiting images from {len(req.images)} to 5 for memory efficiency")
+        
+        if len(images_to_use) < 5:
             raise HTTPException(400, "Minimum 5 images required for training")
         
         # Run blocking operations in thread executor to prevent timeout
         loop = asyncio.get_event_loop()
-        embeddings = await loop.run_in_executor(None, process_training_images, req.images)
+        embeddings = await loop.run_in_executor(None, process_training_images, images_to_use)
         
         if len(embeddings) < 3:
-            logger.error(f"❌ Only {len(embeddings)} valid faces from {len(req.images)} images")
+            logger.error(f"❌ Only {len(embeddings)} valid faces from {len(images_to_use)} images")
             raise HTTPException(400, f"Need at least 3 valid faces, got {len(embeddings)}")
         
-        # Average embeddings for MAXIMUM ACCURACY
+        faces_count = len(embeddings)
+        
+        # Average embeddings
         avg_emb = np.mean(embeddings, axis=0).astype(np.float32)
         avg_emb = normalize_embedding(avg_emb)
         
-        logger.info(f"✅ Training complete: {len(embeddings)} faces processed (HIGH ACCURACY)")
+        # Clear embeddings from memory
+        del embeddings
+        gc.collect()
+        
+        mem_end = log_memory_checkpoint(f"Training END ({req.student_id})")
+        mem_delta = mem_end - mem_start
+        logger.info(f"✅ Training complete: {faces_count} faces processed (memory delta: {mem_delta:+.1f} MB)")
         
         return {
             "success": True,
             "embedding": avg_emb.tolist(),
-            "faces_processed": len(embeddings),
+            "faces_processed": faces_count,
             "embedding_dimension": len(avg_emb)
         }
         
@@ -469,34 +393,47 @@ async def train(req: TrainingRequest):
 
 
 def process_training_images(images: List[str]) -> List[np.ndarray]:
-    """Process images for training (runs in thread executor)"""
+    """Process images for training (memory-optimized for Render free tier)"""
     embeddings = []
+    mem_start = get_memory_usage()
     
-    # Process images for embeddings using lazy-loaded Facenet model
-    for idx, img_b64 in enumerate(images[:50]):
+    # Process images (limited to 5) for embeddings using lazy-loaded Facenet model
+    for idx, img_b64 in enumerate(images[:5]):  # MAX 5 images for memory efficiency
         try:
             rgb = decode_base64(img_b64)
             if rgb is None:
-                logger.debug(f"Image {idx+1}: Failed to decode")
+                logger.debug(f"Image {idx+1}/5: Failed to decode")
                 continue
             
-            # Detect faces with opencv (lightweight, fast)
+            # Detect faces with opencv (lightweight, fast, memory-efficient)
             faces = detect_faces_opencv(rgb)
             if not faces:
-                logger.debug(f"Image {idx+1}: No faces detected")
+                logger.debug(f"Image {idx+1}/5: No faces detected")
+                # Clear memory
+                del rgb
+                gc.collect()
                 continue
             
             # Get embedding from first face using lazy-loaded Facenet model
             emb = get_embedding_facenet512(faces[0][0])
             if emb is not None:
                 embeddings.append(normalize_embedding(emb))
+                logger.debug(f"Image {idx+1}/5: ✅ Embedding extracted ({len(emb)}-d)")
             else:
-                logger.debug(f"Image {idx+1}: Failed to get embedding")
+                logger.debug(f"Image {idx+1}/5: Failed to get embedding")
+            
+            # Clear memory after each image
+            del rgb, faces
+            gc.collect()
                 
         except Exception as e:
-            logger.debug(f"Image {idx+1} error: {str(e)[:30]}")
+            logger.debug(f"Image {idx+1}/5 error: {str(e)[:50]}")
+            gc.collect()
             continue
     
+    mem_end = get_memory_usage()
+    mem_delta = mem_end - mem_start
+    logger.info(f"📊 Processed {len(embeddings)} images (memory delta: {mem_delta:+.1f} MB, final: {mem_end:.1f} MB)")
     return embeddings
 
 
@@ -532,18 +469,25 @@ def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
 
 
 def get_embedding_facenet512(face_roi: np.ndarray) -> Optional[np.ndarray]:
-    """Get embedding using lazy-loaded Facenet model"""
+    """Get embedding using lazy-loaded Facenet model (memory-optimized)"""
     if not DEEPFACE_AVAILABLE:
         return None
     
     try:
+        mem_before = get_memory_usage()
+        
         # Load model on-demand (lazy loading for memory efficiency)
+        # Minimize array copies by passing directly
         embedding_objs = DeepFace.represent(
             img_path=face_roi,
             model_name=MODEL_NAME,
             enforce_detection=False,
-            align=False  # Skip alignment for speed
+            align=False  # Skip alignment for speed and memory
         )
+        
+        mem_after = get_memory_usage()
+        if mem_after - mem_before > 100:
+            logger.warning(f"⚠️ Large memory spike during embedding: +{mem_after - mem_before:.1f} MB")
         
         if embedding_objs and len(embedding_objs) > 0:
             embedding = embedding_objs[0].get("embedding")
@@ -551,6 +495,7 @@ def get_embedding_facenet512(face_roi: np.ndarray) -> Optional[np.ndarray]:
                 return np.array(embedding, dtype=np.float32)
     except Exception as e:
         logger.debug(f"Embedding error: {e}")
+        gc.collect()  # Force garbage collection on error
     
     return None
 
