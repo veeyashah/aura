@@ -330,7 +330,7 @@ export default function LiveAttendance() {
         // Use 0.6 quality for ACCURATE recognition with decent compression
         const imageData = tempCanvas.toDataURL("image/jpeg", 0.6);
 
-        const apiUrl = process.env.NEXT_PUBLIC_PYTHON_API_URL || "http://localhost:8000";
+        const apiUrl = process.env.NEXT_PUBLIC_FACE_API_URL || "http://localhost:8000";
 
         console.log(`🔍 Sending frame to ${apiUrl}/recognize...`);
 
