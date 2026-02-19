@@ -217,6 +217,7 @@ class TrainResponse(BaseModel):
     student_id: str
     images_processed: int
     embeddings_stored: int
+    avg_embedding: List[float]
     message: Optional[str] = None
 
 
@@ -224,7 +225,8 @@ class RecognizeResponse(BaseModel):
     recognized: bool
     student_id: Optional[str] = None
     confidence: Optional[float] = None
-    similarity: Optional[float] = None
+    distance: Optional[float] = None
+    embedding: Optional[List[float]] = None
     reason: Optional[str] = None
 
 
@@ -349,7 +351,8 @@ async def train(
             success=True,
             student_id=student_id,
             images_processed=processed_count,
-            embeddings_stored=len(all_embeddings)
+            embeddings_stored=len(all_embeddings),
+            avg_embedding=avg_embedding
         )
         
     except HTTPException:
@@ -420,6 +423,7 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
         # Compare against all students using cosine similarity
         best_match_id = None
         best_similarity = -1.0
+        best_embedding = None
         
         for student_doc in all_students:
             student_id = student_doc["student_id"]
@@ -434,6 +438,7 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
             if similarity > best_similarity:
                 best_similarity = similarity
                 best_match_id = student_id
+                best_embedding = avg_embedding
         
         # Return result based on threshold
         if best_similarity >= RECOGNITION_THRESHOLD:
@@ -442,14 +447,15 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
                 recognized=True,
                 student_id=best_match_id,
                 confidence=float(best_similarity),
-                similarity=float(best_similarity)
+                distance=float(1.0 - best_similarity),
+                embedding=best_embedding.tolist() if best_embedding is not None else None
             )
         else:
             logger.info(f"❌ NO MATCH: best similarity={best_similarity:.3f} < {RECOGNITION_THRESHOLD}")
             return RecognizeResponse(
                 recognized=False,
                 reason="no_match",
-                similarity=float(best_similarity)
+                distance=float(1.0 - best_similarity)
             )
         
     except HTTPException:
