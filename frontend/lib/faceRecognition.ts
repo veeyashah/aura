@@ -1,7 +1,11 @@
 // frontend Python Face Recognition API integration
-const PYTHON_API_URL = typeof window !== 'undefined' 
-  ? (process.env.NEXT_PUBLIC_FACE_API_URL || 'http://localhost:8000')
-  : 'http://localhost:8000'
+// const PYTHON_API_URL = typeof window !== 'undefined' 
+//   ? (process.env.NEXT_PUBLIC_FACE_API_URL || 'http://localhost:8000')
+//   : 'http://localhost:8000'
+
+const PYTHON_API_URL =
+  process.env.NEXT_PUBLIC_FACE_API_URL || "https://aura-face-api.onrender.com";
+
 
 // Helper: Compress image to smaller size - BALANCED quality/size
 export const compressImageBase64 = (imageBase64: string, quality: number = 0.5): string => {
