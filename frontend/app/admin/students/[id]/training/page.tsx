@@ -245,8 +245,9 @@ export default function StudentTraining() {
       const wakeupTimeout = setTimeout(() => wakeupController.abort(), 10000)
       
       try {
+        const faceApiUrl = process.env.NEXT_PUBLIC_FACE_API_URL || "https://aura-face-api.onrender.com"
         const wakeupResponse = await fetch(
-          'https://aura-face-api.onrender.com/wakeup',
+          `${faceApiUrl}/wakeup`,
           { signal: wakeupController.signal }
         )
         if (!wakeupResponse.ok) {
