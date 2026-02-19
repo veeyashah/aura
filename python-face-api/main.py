@@ -1,8 +1,8 @@
 """
-AURA Face Recognition API - Production Ready
-Model: Facenet512 (512-d embeddings, excellent accuracy)
+AURA Face Recognition API - Memory Optimized
+Model: Facenet (128-d embeddings, CPU-friendly)
 Detector: OpenCV (lightweight, optimized for Render)
-Optimized for Render Free Tier with preloaded models
+Optimized for Render Free Tier with lazy model loading
 """
 
 # ⚡ Disable TensorFlow GPU checks - MUST BE FIRST
@@ -58,11 +58,11 @@ logger.info(f"✅ OpenCV Haar Cascade loaded")
 # CONFIGURATION
 # ============================================================================
 
-MODEL_NAME = "Facenet512"  # 512-d embeddings, superior accuracy
+MODEL_NAME = "Facenet"  # 128-d embeddings, CPU-optimized for free tier
 DETECTOR = "opencv"  # Lightweight, CPU-friendly
-THRESHOLD = 0.65  # Cosine similarity threshold for Facenet512
+THRESHOLD = 0.65  # Cosine similarity threshold
 
-EXPECTED_EMBEDDING_DIMS = [512]
+EXPECTED_EMBEDDING_DIMS = [128]
 
 # ============================================================================
 # GLOBAL STATE
@@ -72,9 +72,6 @@ known_face_encodings: List[np.ndarray] = []
 known_face_names: List[str] = []
 known_face_ids: List[str] = []
 lock = threading.Lock()
-
-# Preloaded models
-FACENET_MODEL = None
 
 # ============================================================================
 # DATA MODELS
@@ -104,25 +101,13 @@ class LiveRecognitionRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global FACENET_MODEL
-    
     logger.info("\n" + "="*70)
-    logger.info("🚀 AURA Face Recognition API v4.0 (Facenet512 Edition)")
+    logger.info("🚀 AURA Face Recognition API v4.0 (Facenet Edition)")
     logger.info("="*70)
-    logger.info(f"📡 Model: {MODEL_NAME} (512-d embeddings)")
+    logger.info(f"📡 Model: {MODEL_NAME} (128-d embeddings, lazy loaded)")
     logger.info(f"🔍 Detector: {DETECTOR} (OpenCV)")
     logger.info(f"🎯 Threshold: {THRESHOLD} (cosine similarity)")
-    
-    # ⚡ PRELOAD MODEL AT STARTUP
-    if DEEPFACE_AVAILABLE:
-        try:
-            logger.info("🔥 Preloading Facenet512 model (this takes 30-60 seconds)...")
-            FACENET_MODEL = DeepFace.build_model(MODEL_NAME)
-            logger.info("✅ Facenet512 model preloaded successfully")
-            logger.info("⚡ Model ready - API will respond instantly on requests")
-        except Exception as e:
-            logger.error(f"❌ Failed to preload model: {e}")
-    
+    logger.info("⚡ Model loading on-demand (lazy) to save memory")
     logger.info("="*70 + "\n")
     yield
     logger.info("👋 API shutdown")
@@ -368,7 +353,7 @@ async def health():
         "detector": DETECTOR,
         "threshold": THRESHOLD,
         "loaded_students": len(known_face_names),
-        "embedding_dimension": 512,
+        "embedding_dimension": 128,
         "version": "4.0"
     }
 
@@ -380,7 +365,7 @@ async def status():
         return {
             "status": "ready" if known_face_names else "empty",
             "students_loaded": len(known_face_names),
-            "embedding_dimension": 512,
+            "embedding_dimension": 128,
             "threshold": THRESHOLD,
             "model": MODEL_NAME,
             "detector": DETECTOR
@@ -487,7 +472,7 @@ def process_training_images(images: List[str]) -> List[np.ndarray]:
     """Process images for training (runs in thread executor)"""
     embeddings = []
     
-    # Use preloaded Facenet512 model
+    # Process images for embeddings using lazy-loaded Facenet model
     for idx, img_b64 in enumerate(images[:50]):
         try:
             rgb = decode_base64(img_b64)
@@ -501,7 +486,7 @@ def process_training_images(images: List[str]) -> List[np.ndarray]:
                 logger.debug(f"Image {idx+1}: No faces detected")
                 continue
             
-            # Get embedding from first face using preloaded Facenet512 model
+            # Get embedding from first face using lazy-loaded Facenet model
             emb = get_embedding_facenet512(faces[0][0])
             if emb is not None:
                 embeddings.append(normalize_embedding(emb))
@@ -533,7 +518,7 @@ def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
         for (x, y, w, h) in faces:
             roi = rgb_img[y:y+h, x:x+w]
             if roi.size > 0:
-                # Facenet512 expects 160x160 input
+                # Facenet expects 160x160 input
                 roi_resized = cv2.resize(roi, (160, 160))
                 results.append((roi_resized, (x, y, w, h)))
         
@@ -547,19 +532,16 @@ def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
 
 
 def get_embedding_facenet512(face_roi: np.ndarray) -> Optional[np.ndarray]:
-    """Get embedding using preloaded Facenet512 model"""
-    global FACENET_MODEL
-    
-    if not DEEPFACE_AVAILABLE or FACENET_MODEL is None:
+    """Get embedding using lazy-loaded Facenet model"""
+    if not DEEPFACE_AVAILABLE:
         return None
     
     try:
-        # Use preloaded Facenet512 model for faster processing
+        # Load model on-demand (lazy loading for memory efficiency)
         embedding_objs = DeepFace.represent(
             img_path=face_roi,
             model_name=MODEL_NAME,
             enforce_detection=False,
-            model=FACENET_MODEL,  # Use preloaded model
             align=False  # Skip alignment for speed
         )
         
@@ -575,7 +557,7 @@ def get_embedding_facenet512(face_roi: np.ndarray) -> Optional[np.ndarray]:
 
 @app.post("/recognize")
 async def recognize(req: RecognitionRequest):
-    """Recognize faces in image - OPTIMIZED for speed with preloaded models"""
+    """Recognize faces in image - OPTIMIZED for speed with lazy model loading"""
     try:
         logger.info(f"🔍 Recognition request (loaded: {len(known_face_names)} students)")
         
@@ -614,7 +596,7 @@ async def recognize(req: RecognitionRequest):
             # Process each face
             for idx, (face_roi, box) in enumerate(faces):
                 try:
-                    # Get embedding with preloaded Facenet512 model
+                    # Get embedding with lazy-loaded Facenet model
                     emb = get_embedding_facenet512(face_roi)
                     if emb is None:
                         logger.debug(f"Face {idx+1}: Failed to get embedding")
