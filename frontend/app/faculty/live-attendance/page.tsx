@@ -236,31 +236,21 @@ export default function LiveAttendance() {
 
       const apiUrl = process.env.NEXT_PUBLIC_FACE_API_URL || "http://localhost:8000";
 
-      const loadResponse = await fetch(`${apiUrl}/load-students`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ students: studentsForAPI }),
-      });
-
-      if (!loadResponse.ok) {
-        const errorText = await loadResponse.text();
-        console.error(
-          `❌ Python API error: ${loadResponse.status} - ${errorText}`,
-        );
-        throw new Error(
-          `Failed to load students to Python API: ${loadResponse.status} ${loadResponse.statusText}`,
-        );
-      }
-
-      const loadResult = await loadResponse.json();
+      // Note: In the new architecture, students are stored in MongoDB on the Python API
+      // The /recognize endpoint queries MongoDB directly, so no pre-loading needed
       console.log(
-        `✅ Loaded ${loadResult.loaded_count} students to Python API (skipped ${loadResult.skipped_count})`,
+        `✅ Skipping pre-load: ${studentsForAPI.length} students will be recognized from MongoDB`,
       );
 
-      if (loadResult.loaded_count === 0) {
-        throw new Error(
-          "Python API failed to load any students - check embeddings format",
-        );
+      // Verify API is accessible with a health check
+      try {
+        const healthResponse = await fetch(`${apiUrl}/health`);
+        if (!healthResponse.ok) {
+          throw new Error(`Python API health check failed: HTTP ${healthResponse.status}`);
+        }
+        console.log("✅ Python API is healthy and ready");
+      } catch (error) {
+        throw new Error(`Python API unreachable at ${apiUrl}`);
       }
 
       // Step 3: Frame processing will start automatically via useEffect
@@ -269,7 +259,7 @@ export default function LiveAttendance() {
 
       // startFrameProcessing triggered by useEffect when isLiveActive changes
       toast.success(
-        `✅ Live recognition started with ${loadResult.loaded_count} students`,
+        `✅ Live recognition started with ${studentsForAPI.length} trained students`,
       );
     } catch (error: any) {
       console.error("Camera error:", error);
@@ -334,11 +324,21 @@ export default function LiveAttendance() {
 
         console.log(`🔍 Sending frame to ${apiUrl}/recognize...`);
 
-        // Send ONLY image - students are already loaded in Python API memory
+        // Convert base64 to File and send as FormData
+        const base64Data = imageData.includes(',') ? imageData.split(',')[1] : imageData
+        const binaryString = atob(base64Data)
+        const bytes = new Uint8Array(binaryString.length)
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i)
+        }
+        const blob = new Blob([bytes], { type: 'image/jpeg' })
+        
+        const formData = new FormData()
+        formData.append('file', blob, 'frame.jpg')
+
         const response = await fetch(`${apiUrl}/recognize`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image: imageData }),
+          body: formData,
         });
 
         console.log(`✅ Python API responded: ${response.status}`);
@@ -355,9 +355,17 @@ export default function LiveAttendance() {
         const result = await response.json();
         console.log("📊 Recognition result:", result);
 
-        if (result.success && result.faces) {
-          console.log(`👤 Found ${result.faces.length} face(s)`);
-          handleRecognitionResult(result.faces);
+        // Handle new API response format: recognized (bool), student_id (str), distance (float)
+        if (result.recognized && result.student_id) {
+          console.log(`👤 Recognized: ${result.student_id} (distance: ${result.distance?.toFixed(3)})`);
+          handleRecognitionResult([{
+            student_id: result.student_id,
+            name: result.student_id,
+            distance: result.distance || 0,
+            box: [0, 0, 0, 0], // API doesn't provide box coordinates, use defaults
+            recognized: true
+          }]);
+
         } else {
           console.debug("ℹ️ No faces detected or recognition failed:", result);
         }

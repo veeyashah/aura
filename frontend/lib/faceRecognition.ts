@@ -43,52 +43,6 @@ export const loadModels = async () => {
   }
 }
 
-export const loadStudentsToAPI = async (students: any[]) => {
-  try {
-    // Accept flexible embedding sizes: 24-d (OpenCV), 128-d (dlib), 512-d (DeepFace)
-    const validSizes = [24, 128, 512]
-    const validStudents = students.filter(s => 
-      s.faceEmbeddings && 
-      Array.isArray(s.faceEmbeddings) && 
-      validSizes.includes(s.faceEmbeddings.length)
-    )
-    
-    console.log(`📥 Loading ${validStudents.length}/${students.length} students to API (embedding sizes: ${validSizes.join(',')})`)
-    
-    if (validStudents.length === 0) {
-      throw new Error(`No valid students found! Valid embedding sizes: ${validSizes.join(',')}`)
-    }
-
-    const response = await fetch(`${PYTHON_API_URL}/load-students`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ students: validStudents })
-    })
-
-    if (!response.ok) {
-      const errorMsg = await response.text()
-      console.error('Python API error:', errorMsg)
-      throw new Error(`Python API error: ${response.status}`)
-    }
-
-    const result = await response.json()
-    console.log(`✅ Python API loaded ${result.loaded_count}/${result.total_requested} students`)
-    console.log(`   Skipped: ${result.skipped_count} (invalid embeddings)`)
-    
-    if (result.loaded_count === 0) {
-      throw new Error(`Python API loaded 0 students - check embeddings are valid (${validSizes.join(',')}-d)`)
-    }
-    
-    return result
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error)
-    console.error('❌ Load students error:', msg)
-    throw new Error(msg)
-  }
-}
-
 export const trainStudent = async (studentId: string, images: string[]) => {
   try {
     if (images.length < 5) {
