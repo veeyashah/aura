@@ -225,12 +225,22 @@ class TrainResponse(BaseModel):
     message: Optional[str] = None
 
 
+class BBox(BaseModel):
+    x: int
+    y: int
+    w: int
+    h: int
+
+
 class RecognizeResponse(BaseModel):
     recognized: bool
     student_id: Optional[str] = None
     confidence: Optional[float] = None
     distance: Optional[float] = None
     embedding: Optional[List[float]] = None
+    bbox: Optional[BBox] = None
+    image_height: Optional[int] = None
+    image_width: Optional[int] = None
     reason: Optional[str] = None
 
 
@@ -401,8 +411,9 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
                 reason="no_face"
             )
         
-        # Extract embedding from first face
+        # Extract bbox and ROI from first detected face
         face_roi = faces[0][0]
+        x, y, w, h = faces[0][1]  # Bounding box coordinates
         unknown_embedding = extract_face_embedding(face_roi)
         
         if unknown_embedding is None:
@@ -452,14 +463,20 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
                 student_id=best_match_id,
                 confidence=float(best_similarity),
                 distance=float(1.0 - best_similarity),
-                embedding=best_embedding.tolist() if best_embedding is not None else None
+                embedding=best_embedding.tolist() if best_embedding is not None else None,
+                bbox=BBox(x=int(x), y=int(y), w=int(w), h=int(h)),
+                image_height=image.shape[0],
+                image_width=image.shape[1]
             )
         else:
             logger.info(f"❌ NO MATCH: best similarity={best_similarity:.3f} < {RECOGNITION_THRESHOLD}")
             return RecognizeResponse(
                 recognized=False,
                 reason="no_match",
-                distance=float(1.0 - best_similarity)
+                distance=float(1.0 - best_similarity),
+                bbox=BBox(x=int(x), y=int(y), w=int(w), h=int(h)),
+                image_height=image.shape[0],
+                image_width=image.shape[1]
             )
         
     except HTTPException:

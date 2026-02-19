@@ -8,9 +8,11 @@ import { toast } from "react-toastify";
 interface DetectedFace {
   name: string;
   student_id: string;
-  distance: number; // Changed from confidence
-  box: [number, number, number, number];
+  distance: number;
+  box: { x: number; y: number; w: number; h: number };
   recognized: boolean;
+  imageWidth?: number;
+  imageHeight?: number;
 }
 
 interface Student {
@@ -362,17 +364,31 @@ export default function LiveAttendance() {
         const result = await response.json();
         console.log("📊 Recognition result:", result);
 
-        // Handle new API response format: recognized (bool), student_id (str), distance (float)
+        // Handle new API response format: recognized (bool), student_id (str), distance (float), bbox, image dimensions
         if (result.recognized && result.student_id) {
           console.log(`👤 Recognized: ${result.student_id} (distance: ${result.distance?.toFixed(3)})`);
           handleRecognitionResult([{
             student_id: result.student_id,
             name: getStudentName(result.student_id),
             distance: result.distance || 0,
-            box: [0, 0, 0, 0], // API doesn't provide box coordinates, use defaults
-            recognized: true
+            box: result.bbox || { x: 0, y: 0, w: 0, h: 0 },
+            recognized: true,
+            imageWidth: result.image_width,
+            imageHeight: result.image_height
           }]);
 
+        } else if (!result.recognized && result.bbox) {
+          // Unknown face detected with bbox
+          console.log(`❌ Unknown face detected (distance: ${result.distance?.toFixed(3)})`);
+          handleRecognitionResult([{
+            student_id: "unknown",
+            name: "Unknown",
+            distance: result.distance || 1.0,
+            box: result.bbox,
+            recognized: false,
+            imageWidth: result.image_width,
+            imageHeight: result.image_height
+          }]);
         } else {
           console.debug("ℹ️ No faces detected or recognition failed:", result);
         }
@@ -436,13 +452,22 @@ export default function LiveAttendance() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     faces.forEach((face: DetectedFace) => {
-      const [left, top, right, bottom] = face.box;
-      const width = right - left;
-      const height = bottom - top;
+      // Scale bbox coordinates from API image size to canvas size
+      const imageWidth = face.imageWidth || canvas.width;
+      const imageHeight = face.imageHeight || canvas.height;
+      const scaleX = canvas.width / imageWidth;
+      const scaleY = canvas.height / imageHeight;
 
-      // Color based on CONFIDENCE THRESHOLD (Distance Metric)
-      let color = "#ff0000"; // Red = unknown
+      const x = face.box.x * scaleX;
+      const y = face.box.y * scaleY;
+      const w = face.box.w * scaleX;
+      const h = face.box.h * scaleY;
+
+      // Determine color and label based on recognition status
+      let color = "#ff0000"; // Red for unknown
+      let label = "Unknown";
       let thresholdLabel = "";
+
       if (face.recognized) {
         if (Array.from(markedStudents).includes(face.student_id)) {
           color = "#0066ff"; // Blue = already marked
@@ -457,34 +482,40 @@ export default function LiveAttendance() {
           color = "#ff3333"; // Red = LOW confidence (>0.35) → REVIEW
           thresholdLabel = " [REVIEW ❌]";
         }
-      } else {
-        // Draw boxes even for unrecognized faces to verify detection
-        color = "#ff0000"; // Red for unknown faces
-        thresholdLabel = " [Unknown]";
+        label = face.name + thresholdLabel;
       }
 
+      // Draw bounding box rectangle
       ctx.strokeStyle = color;
-      ctx.lineWidth = 4;
-      ctx.strokeRect(left, top, width, height);
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x, y, w, h);
 
-      const text = face.recognized ? face.name + thresholdLabel : "Unknown";
-      const distanceText = `d: ${face.distance.toFixed(3)}`; // Show distance
+      // Prepare text elements
+      const nameText = label;
+      const distanceText = `d: ${face.distance.toFixed(3)}`;
 
-      ctx.font = "bold 20px Arial";
-      const textWidth = Math.max(
-        ctx.measureText(text).width,
-        ctx.measureText(distanceText).width,
-      );
-      const textX = right + 10;
-      const textY = top;
+      // Draw name label above the box
+      ctx.font = "bold 16px Arial";
+      const nameMetrics = ctx.measureText(nameText);
+      const labelPadding = 8;
+      const labelHeight = 24;
 
+      // Name background (above the box)
       ctx.fillStyle = color;
-      ctx.fillRect(textX, textY, textWidth + 20, 65);
+      ctx.fillRect(x - 2, y - labelHeight - 8, nameMetrics.width + labelPadding * 2, labelHeight);
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 16px Arial";
-      ctx.fillText(text, textX + 10, textY + 28);
+      ctx.fillText(nameText, x + labelPadding - 2, y - labelHeight + 12);
+
+      // Draw distance label below the box
       ctx.font = "bold 14px Arial";
-      ctx.fillText(distanceText, textX + 10, textY + 55);
+      const distanceMetrics = ctx.measureText(distanceText);
+      ctx.fillStyle = color;
+      ctx.fillRect(x - 2, y + h + 4, distanceMetrics.width + labelPadding * 2, labelHeight - 4);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(distanceText, x + labelPadding - 2, y + h + 18);
+
+      console.debug(`Draw box: ${nameText} at (${x.toFixed(0)}, ${y.toFixed(0)}) size ${w.toFixed(0)}x${h.toFixed(0)}`);
     });
   };
 
