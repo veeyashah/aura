@@ -1,12 +1,9 @@
-setuptools
-wheel
-cmake
-dlib==19.24.6
-face_recognition
 fastapi
 uvicorn[standard]
 python-multipart
+opencv-contrib-python-headless
 numpy
 Pillow
 pymongo
 python-dotenv
+scikit-learn

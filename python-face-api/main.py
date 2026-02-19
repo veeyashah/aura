@@ -1,7 +1,6 @@
 """
-AURA Face Recognition API - dlib-based (face_recognition library)
-Replaces: DeepFace + TensorFlow with lightweight dlib
-Optimized for: Render free tier (512MB RAM, CPU-only)
+AURA Face Recognition API - OpenCV + LBPH (Local Binary Patterns Histograms)
+Lightweight, CPU-efficient face recognition for Render free tier
 """
 
 import os
@@ -13,12 +12,11 @@ from io import BytesIO
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
 from PIL import Image
-import face_recognition
+import cv2
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
@@ -30,7 +28,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-CORS_ORIGIN = os.getenv("CORS_ORIGIN", "https://aura-eight-beta.vercel.app")
 DATABASE_NAME = "attendance_db"
 COLLECTION_NAME = "face_embeddings"
 
@@ -41,13 +38,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Load Haar Cascade for face detection
+CASCADE_PATH = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
+logger.info("✅ Haar Cascade loaded")
+
+# LBPH threshold for recognition
+RECOGNITION_THRESHOLD = 0.72
+
 # ============================================================================
 # MONGODB CONNECTION
 # ============================================================================
 
 try:
     mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-    # Verify connection
     mongo_client.admin.command('ping')
     db = mongo_client[DATABASE_NAME]
     embeddings_collection = db[COLLECTION_NAME]
@@ -64,8 +68,8 @@ except ConnectionFailure as e:
 
 app = FastAPI(
     title="AURA Face Recognition API",
-    version="5.0",
-    description="dlib-based face recognition (face_recognition library)"
+    version="6.0",
+    description="OpenCV + LBPH face recognition"
 )
 
 # ============================================================================
@@ -107,7 +111,7 @@ def load_image_from_bytes(image_bytes: bytes) -> Optional[np.ndarray]:
 
 def resize_image_aspect_ratio(image: np.ndarray, max_width: int = 640, 
                                max_height: int = 480) -> np.ndarray:
-    """Resize image while preserving aspect ratio (max 640x480)"""
+    """Resize image while preserving aspect ratio"""
     h, w = image.shape[:2]
     if w <= max_width and h <= max_height:
         return image
@@ -121,18 +125,46 @@ def resize_image_aspect_ratio(image: np.ndarray, max_width: int = 640,
     return np.array(img_pil)
 
 
-def normalize_embedding(embedding: np.ndarray) -> List[float]:
-    """L2 normalize embedding to unit length"""
-    norm = np.linalg.norm(embedding)
-    if norm > 0:
-        return (embedding / norm).tolist()
-    return embedding.tolist()
+def extract_face_embedding(face_roi: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Extract 10000-d embedding from face ROI using LBPH histogram
+    1. Resize to 100x100
+    2. Flatten to vector
+    3. L2 normalize
+    """
+    try:
+        # Resize to 100x100
+        if face_roi.shape != (100, 100):
+            face_roi = cv2.resize(face_roi, (100, 100))
+        
+        # Flatten to 10000-d vector
+        embedding = face_roi.flatten().astype(np.float32)
+        
+        # L2 normalize
+        norm = np.linalg.norm(embedding)
+        if norm > 0:
+            embedding = embedding / norm
+        
+        return embedding
+    except Exception as e:
+        logger.debug(f"Failed to extract embedding: {e}")
+        return None
 
 
 def compute_average_embedding(embeddings: List[np.ndarray]) -> List[float]:
     """Compute mean embedding and L2 normalize"""
     avg = np.mean(embeddings, axis=0)
-    return normalize_embedding(avg)
+    norm = np.linalg.norm(avg)
+    if norm > 0:
+        avg = avg / norm
+    return avg.tolist()
+
+
+def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute cosine similarity between two vectors"""
+    a_norm = a / (np.linalg.norm(a) + 1e-8)
+    b_norm = b / (np.linalg.norm(b) + 1e-8)
+    return float(np.dot(a_norm, b_norm))
 
 
 def check_db_connection() -> bool:
@@ -151,7 +183,29 @@ def check_db_connection() -> bool:
     return True
 
 
-
+def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
+    """Detect faces using Haar Cascade, return [(roi, box), ...]"""
+    try:
+        gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(50, 50)
+        )
+        
+        results = []
+        for (x, y, w, h) in faces:
+            roi = gray[y:y+h, x:x+w]
+            if roi.size > 0:
+                results.append((roi, (x, y, w, h)))
+        
+        if results:
+            logger.debug(f"✅ Detected {len(results)} face(s)")
+        return results
+    except Exception as e:
+        logger.debug(f"Face detection error: {e}")
+        return []
 
 
 # ============================================================================
@@ -170,7 +224,7 @@ class RecognizeResponse(BaseModel):
     recognized: bool
     student_id: Optional[str] = None
     confidence: Optional[float] = None
-    distance: Optional[float] = None
+    similarity: Optional[float] = None
     reason: Optional[str] = None
 
 
@@ -192,7 +246,7 @@ async def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         service="face-recognition-api",
-        model="dlib-hog-128d",
+        model="opencv-lbph-10000d",
         db=db_status
     )
 
@@ -211,7 +265,6 @@ async def train(
 ) -> TrainResponse:
     """
     Train: Extract face embeddings from images and store in MongoDB
-    Expects: form with student_id (string) and files (list of images, max 10)
     """
     try:
         if not check_db_connection():
@@ -225,15 +278,13 @@ async def train(
                 detail=f"Minimum 5 images required, got {len(files)}"
             )
         
-        # Limit to first 10 files
         files_to_process = files[:10]
-        
         all_embeddings = []
         processed_count = 0
         
         for idx, file in enumerate(files_to_process):
             try:
-                # Read and load image
+                # Load image
                 image_bytes = await file.read()
                 image = load_image_from_bytes(image_bytes)
                 
@@ -244,31 +295,23 @@ async def train(
                 # Resize for speed
                 image = resize_image_aspect_ratio(image)
                 
-                # Detect faces (HOG model: CPU-friendly)
-                face_locations = face_recognition.face_locations(
-                    image, 
-                    model="hog"
-                )
-                
-                if not face_locations:
+                # Detect faces
+                faces = detect_faces_opencv(image)
+                if not faces:
                     logger.debug(f"Image {idx+1}: No face detected")
                     continue
                 
-                # Get encoding for first face
-                face_encodings = face_recognition.face_encodings(
-                    image,
-                    face_locations
-                )
+                # Extract embedding from first face
+                face_roi = faces[0][0]  # Get grayscale ROI
+                embedding = extract_face_embedding(face_roi)
                 
-                if not face_encodings:
-                    logger.debug(f"Image {idx+1}: Failed to get encoding")
+                if embedding is None:
+                    logger.debug(f"Image {idx+1}: Failed to extract embedding")
                     continue
                 
-                # Use first face from this image
-                embedding = face_encodings[0]
                 all_embeddings.append(embedding)
                 processed_count += 1
-                logger.debug(f"Image {idx+1}: ✅ Processed (128-d embedding)")
+                logger.debug(f"Image {idx+1}: ✅ Processed (10000-d embedding)")
                 
             except Exception as e:
                 logger.debug(f"Image {idx+1} error: {str(e)[:50]}")
@@ -320,7 +363,6 @@ async def train(
 async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
     """
     Recognize: Compare face in image against all trained students
-    Expects: form with single image file called 'file'
     """
     try:
         if not check_db_connection():
@@ -328,7 +370,7 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
         
         logger.info("🔍 Recognition request")
         
-        # Read and load image
+        # Load image
         image_bytes = await file.read()
         image = load_image_from_bytes(image_bytes)
         
@@ -339,30 +381,29 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
                 reason="invalid_image"
             )
         
-        # Resize for speed
+        # Resize
         image = resize_image_aspect_ratio(image)
         
         # Detect faces
-        face_locations = face_recognition.face_locations(image, model="hog")
+        faces = detect_faces_opencv(image)
         
-        if not face_locations:
+        if not faces:
             logger.debug("No face detected in image")
             return RecognizeResponse(
                 recognized=False,
                 reason="no_face"
             )
         
-        # Get encoding for first face
-        face_encodings = face_recognition.face_encodings(image, face_locations)
+        # Extract embedding from first face
+        face_roi = faces[0][0]
+        unknown_embedding = extract_face_embedding(face_roi)
         
-        if not face_encodings:
-            logger.debug("Failed to get encoding")
+        if unknown_embedding is None:
+            logger.debug("Failed to extract embedding")
             return RecognizeResponse(
                 recognized=False,
                 reason="no_encoding"
             )
-        
-        unknown_encoding = face_encodings[0]
         
         # Load all trained students from MongoDB
         all_students = list(embeddings_collection.find({}))
@@ -376,50 +417,39 @@ async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
         
         logger.info(f"Comparing against {len(all_students)} trained students")
         
-        # Compare against all students
+        # Compare against all students using cosine similarity
         best_match_id = None
-        best_distance = float('inf')
-        best_confidence = 0.0
+        best_similarity = -1.0
         
         for student_doc in all_students:
             student_id = student_doc["student_id"]
             avg_embedding = np.array(student_doc["avg_embedding"])
             
-            # Compute distance
-            distance = face_recognition.face_distance([avg_embedding], unknown_encoding)[0]
+            # Compute cosine similarity
+            similarity = cosine_sim(unknown_embedding, avg_embedding)
             
-            # Check match (tolerance=0.5 is default)
-            matches = face_recognition.compare_faces(
-                [avg_embedding],
-                unknown_encoding,
-                tolerance=0.5
-            )
+            logger.debug(f"  {student_id}: similarity={similarity:.3f}")
             
-            is_match = matches[0]
-            
-            logger.debug(f"  {student_id}: distance={distance:.3f}, match={is_match}")
-            
-            # Update best match if this is better (lower distance)
-            if distance < best_distance:
-                best_distance = distance
-                best_match_id = student_id if is_match else None
-                best_confidence = 1.0 - distance  # Convert distance to confidence
+            # Update best match if this is better (higher similarity)
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_match_id = student_id
         
-        # Return result
-        if best_match_id is not None and best_distance <= 0.5:
-            logger.info(f"✅ MATCHED: {best_match_id} (distance={best_distance:.3f})")
+        # Return result based on threshold
+        if best_similarity >= RECOGNITION_THRESHOLD:
+            logger.info(f"✅ MATCHED: {best_match_id} (similarity={best_similarity:.3f})")
             return RecognizeResponse(
                 recognized=True,
                 student_id=best_match_id,
-                confidence=float(best_confidence),
-                distance=float(best_distance)
+                confidence=float(best_similarity),
+                similarity=float(best_similarity)
             )
         else:
-            logger.info(f"❌ NO MATCH: best distance={best_distance:.3f}")
+            logger.info(f"❌ NO MATCH: best similarity={best_similarity:.3f} < {RECOGNITION_THRESHOLD}")
             return RecognizeResponse(
                 recognized=False,
                 reason="no_match",
-                distance=float(best_distance)
+                similarity=float(best_similarity)
             )
         
     except HTTPException:
@@ -484,12 +514,12 @@ async def list_students():
 
 if __name__ == "__main__":
     print("\n" + "="*70)
-    print("Starting AURA Face Recognition API v5.0 - dlib Edition")
+    print("Starting AURA Face Recognition API v6.0 - OpenCV Lite Edition")
     print("="*70)
-    print(f"📍 Service: Face recognition using face_recognition (dlib)")
-    print(f"🎯 Model: HOG face detection + 128-d dlib CNN encoding")
+    print(f"📍 Service: Face recognition using OpenCV + LBPH")
+    print(f"🎯 Model: Haar Cascade detection + 10000-d histogram embedding")
+    print(f"📊 Similarity: Cosine distance with threshold {RECOGNITION_THRESHOLD}")
     print(f"💾 Database: MongoDB at {MONGODB_URI[:50]}...")
-    print(f"🌐 CORS Origins: {CORS_ORIGIN}")
     print("="*70 + "\n")
     
     uvicorn.run(
