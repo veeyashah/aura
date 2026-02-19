@@ -193,9 +193,9 @@ def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
         gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
         faces = face_cascade.detectMultiScale(
             gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(50, 50)
+            scaleFactor=1.05,
+            minNeighbors=3,
+            minSize=(30, 30)
         )
         
         results = []

@@ -953,29 +953,43 @@ export default function LiveAttendance() {
             </div>
             <div className="mt-4 bg-gray-50 rounded-xl p-4 border border-gray-200">
               <div className="text-sm font-semibold text-gray-800 mb-3">
-                Detection Legend:
+                📊 Detection Legend (Auto-Marking System):
               </div>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                <div className="flex items-center bg-white p-2 rounded-lg shadow-sm">
-                  <div className="w-4 h-4 bg-green-500 rounded mr-2"></div>
-                  <span className="font-medium">Excellent (d ≤ 0.35)</span>
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 text-xs">
+                <div className="flex items-center bg-white p-3 rounded-lg shadow-sm border-l-4 border-green-500 hover:shadow-md transition-all">
+                  <div className="w-5 h-5 bg-green-500 rounded mr-3 flex-shrink-0"></div>
+                  <div>
+                    <span className="font-bold text-green-700 block">HIGH CONFIDENCE</span>
+                    <span className="text-gray-600">(d ≤ 0.22) ✅ AUTO-MARKED</span>
+                  </div>
                 </div>
-                <div className="flex items-center bg-white p-2 rounded-lg shadow-sm">
-                  <div className="w-4 h-4 bg-yellow-500 rounded mr-2"></div>
-                  <span className="font-medium">Good (d ≤ 0.50)</span>
+                <div className="flex items-center bg-white p-3 rounded-lg shadow-sm border-l-4 border-amber-500 hover:shadow-md transition-all">
+                  <div className="w-5 h-5 bg-amber-500 rounded mr-3 flex-shrink-0"></div>
+                  <div>
+                    <span className="font-bold text-amber-700 block">MEDIUM CONFIDENCE</span>
+                    <span className="text-gray-600">(0.22 &lt; d ≤ 0.35) ⚠️ REVIEW</span>
+                  </div>
                 </div>
-                <div className="flex items-center bg-white p-2 rounded-lg shadow-sm">
-                  <div className="w-4 h-4 bg-red-500 rounded mr-2"></div>
-                  <span className="font-medium">Unknown (d &gt; 0.50)</span>
+                <div className="flex items-center bg-white p-3 rounded-lg shadow-sm border-l-4 border-red-500 hover:shadow-md transition-all">
+                  <div className="w-5 h-5 bg-red-500 rounded mr-3 flex-shrink-0"></div>
+                  <div>
+                    <span className="font-bold text-red-700 block">NOT RECOGNIZED</span>
+                    <span className="text-gray-600">(d &gt; 0.35) ❌ ABSENT</span>
+                  </div>
                 </div>
-                <div className="flex items-center bg-white p-2 rounded-lg shadow-sm">
-                  <div className="w-4 h-4 bg-blue-500 rounded mr-2"></div>
-                  <span className="font-medium">Already Marked</span>
+                <div className="flex items-center bg-white p-3 rounded-lg shadow-sm border-l-4 border-blue-500 hover:shadow-md transition-all">
+                  <div className="w-5 h-5 bg-blue-500 rounded mr-3 flex-shrink-0"></div>
+                  <div>
+                    <span className="font-bold text-blue-700 block">ALREADY MARKED</span>
+                    <span className="text-gray-600">Student present ✓</span>
+                  </div>
                 </div>
               </div>
-              <div className="mt-3 text-xs text-gray-600 bg-white p-2 rounded-lg">
-                🔄 Processing every 1s • dlib CNN • Distance threshold: 0.50 •
-                Lower = better match
+              <div className="mt-3 bg-gradient-to-r from-blue-50 to-indigo-50 p-3 rounded-lg border border-blue-200">
+                <div className="text-xs text-gray-700">
+                  <p className="font-semibold text-gray-800 mb-1">⚙️ System Settings:</p>
+                  <p>🔄 Processing every 1s • 🎯 Haar Cascade detection • 📏 Distance metric (lower = better match) • ⚡ Auto-marks high confidence faces only</p>
+                </div>
               </div>
             </div>
           </div>
