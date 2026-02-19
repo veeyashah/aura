@@ -58,7 +58,7 @@ export default function StudentTraining() {
     return () => clearInterval(interval)
   }, [processing, processingMessages.length])
 
-  // Simulate realistic processing progress (45-60s typical backend training)
+  // Simulate realistic processing progress (15-20s with 128-d embeddings)
   useEffect(() => {
     if (!processing) return
     
@@ -69,10 +69,10 @@ export default function StudentTraining() {
       return
     }
 
-    // Update progress every 400ms
+    // Update progress every 300ms
     const progressInterval = setInterval(() => {
       const elapsed = (Date.now() - processingStartTime) / 1000 // in seconds
-      const estimatedTotal = 50 // Assume ~50 seconds typical processing
+      const estimatedTotal = 18 // ~18 seconds for 128-d embedding processing (was 50s for 10000-d)
       
       // Smooth curve: cubic ease-in-out style progress
       // Front-loads progress early, then slows down near the end
@@ -92,7 +92,7 @@ export default function StudentTraining() {
       }
       
       setProcessingProgress(Math.min(Math.round(newProgress), 95))
-    }, 400)
+    }, 300)
 
     return () => clearInterval(progressInterval)
   }, [processing, processingStartTime])
@@ -109,12 +109,16 @@ export default function StudentTraining() {
 
   // Helper function to estimate time remaining
   const getTimeRemaining = (percent: number): string => {
-    const estimatedTotal = 50 // seconds
+    const estimatedTotal = 18 // seconds (updated for 128-d embeddings)
     if (percent >= 95) return 'Almost done!'
-    const remaining = Math.ceil(((100 - percent) / percent) * ((processingStartTime ? (Date.now() - processingStartTime) / 1000 : 0)))
-    if (remaining <= 0) return 'Finishing...'
-    if (remaining > 60) return `~${Math.ceil(remaining / 60)}m remaining`
-    return `~${remaining}s remaining`
+    if (processingStartTime === null) return 'Starting...'
+    
+    const elapsed = (Date.now() - processingStartTime) / 1000
+    const estimatedRemaining = Math.max(0, estimatedTotal - elapsed)
+    
+    if (estimatedRemaining <= 0) return 'Finishing...'
+    if (estimatedRemaining < 1) return '<1s remaining'
+    return `~${Math.ceil(estimatedRemaining)}s remaining`
   }
 
   const fetchStudent = async () => {
@@ -418,7 +422,7 @@ export default function StudentTraining() {
               <div className="flex justify-center mb-8">
                 <div className="relative w-32 h-32">
                   {/* Outer rotating circle */}
-                  <svg className="absolute inset-0 w-32 h-32 transform -rotate-90 animate-spin" style={{ animationDuration: '3s' }} viewBox="0 0 100 100">
+                  <svg className="absolute inset-0 w-32 h-32 transform -rotate-90 animate-spin" style={{ animationDuration: '1.5s' }} viewBox="0 0 100 100">
                     <circle cx="50" cy="50" r="45" fill="none" stroke="#3B82F6" strokeWidth="3" strokeDasharray="141 188" opacity="0.8" />
                   </svg>
                   
