@@ -170,9 +170,13 @@ export const trainStudent = async (studentId: string, images: string[]) => {
 
     console.log('✅ Training completed:', result)
     
-    // Python API returns 'avg_embedding' for 128-d dlib encoding
+    // Python API returns 'avg_embedding' - must be exactly 128-d
     if (!result.avg_embedding || !Array.isArray(result.avg_embedding)) {
       throw new Error('Invalid embedding received from Python API')
+    }
+    
+    if (result.avg_embedding.length !== 128) {
+      throw new Error(`Invalid embedding dimension: got ${result.avg_embedding.length}d, expected 128d`)
     }
     
     console.log(`✅ Valid embedding received: ${result.avg_embedding.length} dimensions`)

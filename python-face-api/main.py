@@ -127,18 +127,22 @@ def resize_image_aspect_ratio(image: np.ndarray, max_width: int = 640,
 
 def extract_face_embedding(face_roi: np.ndarray) -> Optional[np.ndarray]:
     """
-    Extract 10000-d embedding from face ROI using LBPH histogram
-    1. Resize to 100x100
-    2. Flatten to vector
-    3. L2 normalize
+    Extract 128-d embedding from face ROI
+    1. Resize to 128x128 for quality
+    2. Resize to 16x8 to get 128 pixels
+    3. Flatten to vector (16*8=128 dimensions)
+    4. L2 normalize
     """
     try:
-        # Resize to 100x100
-        if face_roi.shape != (100, 100):
-            face_roi = cv2.resize(face_roi, (100, 100))
+        # First resize to 128x128 for better quality
+        if face_roi.shape[:2] != (128, 128):
+            face_roi = cv2.resize(face_roi, (128, 128))
         
-        # Flatten to 10000-d vector
-        embedding = face_roi.flatten().astype(np.float32)
+        # Then resize to 16x8 to get exactly 128-d vector (16*8=128)
+        face_small = cv2.resize(face_roi, (16, 8))
+        
+        # Flatten to 128-d vector
+        embedding = face_small.flatten().astype(np.float32)
         
         # L2 normalize
         norm = np.linalg.norm(embedding)
@@ -248,7 +252,7 @@ async def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         service="face-recognition-api",
-        model="opencv-lbph-10000d",
+        model="opencv-lbph-128d",
         db=db_status
     )
 
@@ -313,7 +317,7 @@ async def train(
                 
                 all_embeddings.append(embedding)
                 processed_count += 1
-                logger.debug(f"Image {idx+1}: ✅ Processed (10000-d embedding)")
+                logger.debug(f"Image {idx+1}: ✅ Processed (128-d embedding)")
                 
             except Exception as e:
                 logger.debug(f"Image {idx+1} error: {str(e)[:50]}")
@@ -523,7 +527,7 @@ if __name__ == "__main__":
     print("Starting AURA Face Recognition API v6.0 - OpenCV Lite Edition")
     print("="*70)
     print(f"📍 Service: Face recognition using OpenCV + LBPH")
-    print(f"🎯 Model: Haar Cascade detection + 10000-d histogram embedding")
+    print(f"🎯 Model: Haar Cascade detection + 128-d embedding")
     print(f"📊 Similarity: Cosine distance with threshold {RECOGNITION_THRESHOLD}")
     print(f"💾 Database: MongoDB at {MONGODB_URI[:50]}...")
     print("="*70 + "\n")
