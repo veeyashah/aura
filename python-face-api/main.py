@@ -1,68 +1,40 @@
 """
-AURA Face Recognition API - Memory Optimized
-Model: Facenet (128-d embeddings, CPU-friendly)
-Detector: OpenCV (lightweight, optimized for Render)
-Optimized for Render Free Tier with lazy model loading
+AURA Face Recognition API - dlib-based (face_recognition library)
+Replaces: DeepFace + TensorFlow with lightweight dlib
+Optimized for: Render free tier (512MB RAM, CPU-only)
 """
 
-# ⚡ Disable TensorFlow GPU checks - MUST BE FIRST
 import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from contextlib import asynccontextmanager
-import cv2
-import numpy as np
-import base64
-import io
-from PIL import Image
-from typing import List, Optional
 import logging
 from datetime import datetime
-import threading
-import json
-import asyncio
-import gc
+from typing import List, Optional
+import numpy as np
+from io import BytesIO
 
-# Optional memory monitoring
-PSUTIL_AVAILABLE = False
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    pass
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import uvicorn
 
-
-# ============================================================================
-# MEMORY MONITORING
-# ============================================================================
-
-def get_memory_usage():
-    """Get current memory usage in MB (returns 0 if psutil unavailable)"""
-    if not PSUTIL_AVAILABLE:
-        return 0
-    try:
-        process = psutil.Process()
-        return process.memory_info().rss / 1024 / 1024  # Convert to MB
-    except:
-        return 0
-
-def log_memory_checkpoint(label: str):
-    """Log memory usage at a checkpoint"""
-    mem_mb = get_memory_usage()
-    if mem_mb > 0:
-        logger.info(f"💾 {label}: {mem_mb:.1f} MB")
-    return mem_mb
-
+from PIL import Image
+import face_recognition
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
+from dotenv import load_dotenv
 
 # ============================================================================
-# LOGGING
+# CONFIGURATION
 # ============================================================================
 
+load_dotenv()
+
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+CORS_ORIGIN = os.getenv("CORS_ORIGIN", "https://aura-eight-beta.vercel.app")
+DATABASE_NAME = "attendance_db"
+COLLECTION_NAME = "face_embeddings"
+
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -70,89 +42,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# DEEPFACE & MODEL SETUP
+# MONGODB CONNECTION
 # ============================================================================
 
-DEEPFACE_AVAILABLE = False
 try:
-    from deepface import DeepFace
-    DEEPFACE_AVAILABLE = True
-    logger.info("✅ DeepFace imported successfully")
-except ImportError as e:
-    logger.error(f"❌ DeepFace import failed: {e}")
-
-# Load OpenCV cascade for face detection
-cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-face_cascade = cv2.CascadeClassifier(cascade_path)
-logger.info(f"✅ OpenCV Haar Cascade loaded")
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-MODEL_NAME = "Facenet"  # 128-d embeddings, CPU-optimized for free tier
-DETECTOR = "opencv"  # Lightweight, CPU-friendly
-THRESHOLD = 0.65  # Cosine similarity threshold
-
-EXPECTED_EMBEDDING_DIMS = [128]
+    mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    # Verify connection
+    mongo_client.admin.command('ping')
+    db = mongo_client[DATABASE_NAME]
+    embeddings_collection = db[COLLECTION_NAME]
+    logger.info("✅ MongoDB connected successfully")
+    DB_CONNECTED = True
+except ConnectionFailure as e:
+    logger.error(f"❌ MongoDB connection failed: {e}")
+    embeddings_collection = None
+    DB_CONNECTED = False
 
 # ============================================================================
-# GLOBAL STATE
+# FASTAPI APP
 # ============================================================================
-
-known_face_encodings: List[np.ndarray] = []
-known_face_names: List[str] = []
-known_face_ids: List[str] = []
-lock = threading.Lock()
-
-# ============================================================================
-# DATA MODELS
-# ============================================================================
-
-class TrainingRequest(BaseModel):
-    student_id: str
-    images: List[str]
-
-
-class RecognitionRequest(BaseModel):
-    image: str
-
-
-class StudentData(BaseModel):
-    studentId: str
-    name: str
-    faceEmbeddings: List[float]
-
-
-class LiveRecognitionRequest(BaseModel):
-    students: List[StudentData]
-
-# ============================================================================
-# LIFESPAN
-# ============================================================================
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("\n" + "="*70)
-    logger.info("🚀 AURA Face Recognition API v4.0 (Facenet Edition)")
-    logger.info("="*70)
-    logger.info(f"📡 Model: {MODEL_NAME} (128-d embeddings, lazy loaded)")
-    logger.info(f"🔍 Detector: {DETECTOR} (OpenCV)")
-    logger.info(f"🎯 Threshold: {THRESHOLD} (cosine similarity)")
-    logger.info("⚡ Model loading on-demand (lazy) to save memory")
-    logger.info("="*70 + "\n")
-    yield
-    logger.info("👋 API shutdown")
-
 
 app = FastAPI(
     title="AURA Face Recognition API",
-    version="4.0",
-    lifespan=lifespan
+    version="5.0",
+    description="dlib-based face recognition (face_recognition library)"
 )
 
 # ============================================================================
-# CORS MIDDLEWARE - FIXED: Explicit origins, no credentials
+# CORS MIDDLEWARE
 # ============================================================================
 
 app.add_middleware(
@@ -162,14 +79,10 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:3000"
     ],
-    allow_credentials=False,  # Changed from True - cannot use with explicit origins
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
-
-# ============================================================================
-# PREFLIGHT HANDLER - OPTIONS for all routes
-# ============================================================================
 
 @app.options("/{path:path}")
 async def preflight_handler(path: str, request: Request):
@@ -180,89 +93,92 @@ async def preflight_handler(path: str, request: Request):
 # UTILITY FUNCTIONS
 # ============================================================================
 
-def decode_base64(b64_str: str) -> Optional[np.ndarray]:
-    """Decode base64 to RGB image"""
+def load_image_from_bytes(image_bytes: bytes) -> Optional[np.ndarray]:
+    """Load image from bytes and convert to RGB numpy array"""
     try:
-        if "," in b64_str:
-            b64_str = b64_str.split(",")[1]
-        
-        # Add padding if needed
-        padding = len(b64_str) % 4
-        if padding:
-            b64_str += "=" * (4 - padding)
-        
-        img = Image.open(io.BytesIO(base64.b64decode(b64_str)))
+        img = Image.open(BytesIO(image_bytes))
         if img.mode != 'RGB':
             img = img.convert('RGB')
-        
         return np.array(img)
     except Exception as e:
-        logger.error(f"❌ Decode error: {e}")
+        logger.debug(f"Failed to load image: {e}")
         return None
 
 
+def resize_image_aspect_ratio(image: np.ndarray, max_width: int = 640, 
+                               max_height: int = 480) -> np.ndarray:
+    """Resize image while preserving aspect ratio (max 640x480)"""
+    h, w = image.shape[:2]
+    if w <= max_width and h <= max_height:
+        return image
+    
+    scale = min(max_width / w, max_height / h)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    img_pil = Image.fromarray(image)
+    img_pil = img_pil.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    return np.array(img_pil)
 
 
-
-def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
-    """Detect faces using OpenCV Haar Cascade (memory-optimized)"""
-    results = []
-    try:
-        gray = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2GRAY)
-        
-        # Optimized parameters for low-memory detection
-        faces = face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.05,
-            minNeighbors=3,
-            minSize=(20, 20),
-            flags=cv2.CASCADE_SCALE_IMAGE
-        )
-        
-        for (x, y, w, h) in faces:
-            roi = rgb_img[y:y+h, x:x+w]
-            if roi.size > 0:
-                # Facenet expects 160x160 to save memory
-                roi_resized = cv2.resize(roi, (160, 160))
-                results.append((roi_resized, (x, y, w, h)))
-        
-        if results:
-            logger.debug(f"✅ OpenCV detected {len(results)} face(s)")
-            
-        return results
-    except Exception as e:
-        logger.debug(f"Face detection error: {e}")
-        return []
-
-
-def detect_faces(rgb_img: np.ndarray) -> List[tuple]:
-    """Detect faces using OpenCV only (memory-efficient for Render free tier)"""
-    return detect_faces_opencv(rgb_img)
-
-
-
-
-
-def normalize_embedding(emb: np.ndarray) -> np.ndarray:
-    """L2 normalize embedding"""
-    norm = np.linalg.norm(emb)
+def normalize_embedding(embedding: np.ndarray) -> List[float]:
+    """L2 normalize embedding to unit length"""
+    norm = np.linalg.norm(embedding)
     if norm > 0:
-        return (emb / norm).astype(np.float32)
-    return emb.astype(np.float32)
+        return (embedding / norm).tolist()
+    return embedding.tolist()
 
 
-def cosine_similarity(e1: np.ndarray, e2: np.ndarray) -> float:
-    """Compute cosine similarity (0-1, higher = more similar)"""
-    # Normalize for cosine similarity
-    e1_norm = e1 / (np.linalg.norm(e1) + 1e-10)
-    e2_norm = e2 / (np.linalg.norm(e2) + 1e-10)
+def compute_average_embedding(embeddings: List[np.ndarray]) -> List[float]:
+    """Compute mean embedding and L2 normalize"""
+    avg = np.mean(embeddings, axis=0)
+    return normalize_embedding(avg)
+
+
+def check_db_connection() -> bool:
+    """Check if MongoDB is connected"""
+    global DB_CONNECTED, mongo_client, db, embeddings_collection
     
-    similarity = float(np.dot(e1_norm, e2_norm))
-    
-    # Clamp to [0, 1] range for cosine similarity
-    return max(0.0, min(1.0, similarity))
+    if not DB_CONNECTED:
+        try:
+            mongo_client.admin.command('ping')
+            db = mongo_client[DATABASE_NAME]
+            embeddings_collection = db[COLLECTION_NAME]
+            DB_CONNECTED = True
+            return True
+        except:
+            return False
+    return True
 
 
+
+
+
+# ============================================================================
+# DATA MODELS
+# ============================================================================
+
+class TrainResponse(BaseModel):
+    success: bool
+    student_id: str
+    images_processed: int
+    embeddings_stored: int
+    message: Optional[str] = None
+
+
+class RecognizeResponse(BaseModel):
+    recognized: bool
+    student_id: Optional[str] = None
+    confidence: Optional[float] = None
+    distance: Optional[float] = None
+    reason: Optional[str] = None
+
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
+    model: str
+    db: str
 
 
 # ============================================================================
@@ -270,176 +186,128 @@ def cosine_similarity(e1: np.ndarray, e2: np.ndarray) -> float:
 # ============================================================================
 
 @app.get("/health")
-async def health():
-    """Health check endpoint - for Render monitoring"""
-    return {
-        "status": "ok",
-        "model": MODEL_NAME,
-        "detector": DETECTOR,
-        "version": "4.0"
-    }
+async def health() -> HealthResponse:
+    """Health check endpoint"""
+    db_status = "connected" if check_db_connection() else "error"
+    return HealthResponse(
+        status="ok",
+        service="face-recognition-api",
+        model="dlib-hog-128d",
+        db=db_status
+    )
 
 
 @app.get("/wakeup")
 async def wakeup():
-    """Wakeup endpoint - for Render cold start ping from frontend"""
-    logger.info("⏰ Wakeup ping received from frontend")
-    return {
-        "status": "ready",
-        "message": "Face recognition service is awake"
-    }
-
-
-@app.get("/status")
-async def status():
-    """Get detailed status"""
-    with lock:
-        return {
-            "status": "ready" if known_face_names else "empty",
-            "students_loaded": len(known_face_names),
-            "embedding_dimension": 128,
-            "threshold": THRESHOLD,
-            "model": MODEL_NAME,
-            "detector": DETECTOR
-        }
-
-
-@app.post("/load-students")
-async def load_students(req: LiveRecognitionRequest):
-    """Load student embeddings into memory"""
-    global known_face_encodings, known_face_names, known_face_ids
-    
-    try:
-        with lock:
-            known_face_encodings.clear()
-            known_face_names.clear()
-            known_face_ids.clear()
-            
-            logger.info(f"📥 Loading {len(req.students)} students...")
-            
-            loaded = 0
-            skipped = 0
-            errors = []
-            
-            for student in req.students:
-                try:
-                    if not student.faceEmbeddings or len(student.faceEmbeddings) == 0:
-                        skipped += 1
-                        errors.append(f"{student.name}: No embeddings")
-                        continue
-                    
-                    # Validate embedding dimension
-                    if len(student.faceEmbeddings) not in EXPECTED_EMBEDDING_DIMS:
-                        skipped += 1
-                        errors.append(f"{student.name}: Invalid dimension {len(student.faceEmbeddings)}d (expected {EXPECTED_EMBEDDING_DIMS[0]}d)")
-                        continue
-                    
-                    emb = np.array(student.faceEmbeddings, dtype=np.float32)
-                    emb = normalize_embedding(emb)
-                    
-                    known_face_encodings.append(emb)
-                    known_face_names.append(student.name)
-                    known_face_ids.append(student.studentId)
-                    loaded += 1
-                    
-                except Exception as e:
-                    skipped += 1
-                    errors.append(f"{student.name}: {str(e)[:50]}")
-            
-            logger.info(f"✅ Loaded {loaded} students, skipped {skipped}")
-            if errors and len(errors) <= 5:
-                for err in errors[:5]:
-                    logger.debug(f"   - {err}")
-            
-            return {
-                "success": True,
-                "loaded_count": loaded,
-                "skipped_count": skipped,
-                "total_requested": len(req.students),
-                "errors": errors[:10] if errors else []
-            }
-    except Exception as e:
-        logger.error(f"❌ Load students error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Wakeup endpoint for Render cold start"""
+    logger.info("⏰ Wakeup ping received")
+    return {"awake": True}
 
 
 @app.post("/train")
-async def train(req: TrainingRequest):
-    """Train: Extract embeddings from images (ONE-AT-A-TIME memory-optimized for Render)"""
+async def train(
+    student_id: str = Form(...),
+    files: List[UploadFile] = File(...)
+) -> TrainResponse:
+    """
+    Train: Extract face embeddings from images and store in MongoDB
+    Expects: form with student_id (string) and files (list of images, max 10)
+    """
     try:
-        mem_start = log_memory_checkpoint(f"Training START ({req.student_id})")
-        logger.info(f"🎓 Training {req.student_id} with {len(req.images)} images")
+        if not check_db_connection():
+            raise HTTPException(status_code=503, detail="MongoDB not available")
         
-        # Limit images to 5 for memory efficiency on free tier
-        images_to_use = req.images[:5]
-        if len(req.images) > 5:
-            logger.warning(f"⚠️ Limiting images from {len(req.images)} to 5 for memory efficiency")
+        logger.info(f"🎓 Training student {student_id} with {len(files)} files")
         
-        if len(images_to_use) < 5:
-            raise HTTPException(400, "Minimum 5 images required for training")
+        if len(files) < 5:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Minimum 5 images required, got {len(files)}"
+            )
         
-        # Process images ONE AT A TIME (not in batch)
-        embeddings = []
-        for idx, img_b64 in enumerate(images_to_use):
+        # Limit to first 10 files
+        files_to_process = files[:10]
+        
+        all_embeddings = []
+        processed_count = 0
+        
+        for idx, file in enumerate(files_to_process):
             try:
-                logger.debug(f"📸 Processing image {idx+1}/5...")
+                # Read and load image
+                image_bytes = await file.read()
+                image = load_image_from_bytes(image_bytes)
                 
-                # Decode image
-                rgb = decode_base64(img_b64)
-                if rgb is None:
-                    logger.debug(f"Image {idx+1}: Failed to decode")
+                if image is None:
+                    logger.debug(f"Image {idx+1}: Failed to load")
                     continue
                 
-                # Detect faces
-                faces = detect_faces_opencv(rgb)
-                if not faces:
-                    logger.debug(f"Image {idx+1}: No faces detected")
-                    del rgb
-                    gc.collect()
+                # Resize for speed
+                image = resize_image_aspect_ratio(image)
+                
+                # Detect faces (HOG model: CPU-friendly)
+                face_locations = face_recognition.face_locations(
+                    image, 
+                    model="hog"
+                )
+                
+                if not face_locations:
+                    logger.debug(f"Image {idx+1}: No face detected")
                     continue
                 
-                # Get embedding from first face
-                emb = get_embedding_facenet(faces[0][0])
-                if emb is not None:
-                    embeddings.append(normalize_embedding(emb))
-                    logger.debug(f"Image {idx+1}: ✅ Embedding extracted ({len(emb)}-d)")
-                else:
-                    logger.debug(f"Image {idx+1}: Failed to get embedding")
+                # Get encoding for first face
+                face_encodings = face_recognition.face_encodings(
+                    image,
+                    face_locations
+                )
                 
-                # CRITICAL: Clear memory after each image
-                del rgb, faces
-                gc.collect()
-                logger.debug(f"Image {idx+1}: Memory cleared")
+                if not face_encodings:
+                    logger.debug(f"Image {idx+1}: Failed to get encoding")
+                    continue
+                
+                # Use first face from this image
+                embedding = face_encodings[0]
+                all_embeddings.append(embedding)
+                processed_count += 1
+                logger.debug(f"Image {idx+1}: ✅ Processed (128-d embedding)")
                 
             except Exception as e:
                 logger.debug(f"Image {idx+1} error: {str(e)[:50]}")
-                gc.collect()
                 continue
         
-        if len(embeddings) < 3:
-            logger.error(f"❌ Only {len(embeddings)} valid faces from {len(images_to_use)} images")
-            raise HTTPException(400, f"Need at least 3 valid faces, got {len(embeddings)}")
+        # Validate we have enough embeddings
+        if len(all_embeddings) < 3:
+            logger.warning(f"Only {len(all_embeddings)} valid faces from {len(files_to_process)} images")
+            raise HTTPException(
+                status_code=400,
+                detail="Not enough clear face images. Please retake photos in better lighting."
+            )
         
-        faces_count = len(embeddings)
+        # Compute average embedding
+        avg_embedding = compute_average_embedding(all_embeddings)
         
-        # Average embeddings
-        avg_emb = np.mean(embeddings, axis=0).astype(np.float32)
-        avg_emb = normalize_embedding(avg_emb)
-        
-        # Clear embeddings from memory
-        del embeddings
-        gc.collect()
-        
-        mem_end = log_memory_checkpoint(f"Training END ({req.student_id})")
-        mem_delta = mem_end - mem_start
-        logger.info(f"✅ Training complete: {faces_count} faces processed (memory delta: {mem_delta:+.1f} MB)")
-        
-        return {
-            "success": True,
-            "embedding": avg_emb.tolist(),
-            "faces_processed": faces_count,
-            "embedding_dimension": len(avg_emb)
+        # Save to MongoDB (upsert)
+        document = {
+            "student_id": student_id,
+            "embeddings": [emb.tolist() for emb in all_embeddings],
+            "avg_embedding": avg_embedding,
+            "image_count": len(all_embeddings),
+            "updated_at": datetime.utcnow()
         }
+        
+        embeddings_collection.update_one(
+            {"student_id": student_id},
+            {"$set": document},
+            upsert=True
+        )
+        
+        logger.info(f"✅ Training complete: {len(all_embeddings)} embeddings stored for {student_id}")
+        
+        return TrainResponse(
+            success=True,
+            student_id=student_id,
+            images_processed=processed_count,
+            embeddings_stored=len(all_embeddings)
+        )
         
     except HTTPException:
         raise
@@ -448,219 +316,188 @@ async def train(req: TrainingRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def get_embedding_facenet(face_roi: np.ndarray) -> Optional[np.ndarray]:
-    """Get embedding using lazy-loaded Facenet model (memory-optimized)"""
-    if not DEEPFACE_AVAILABLE:
-        logger.warning("⚠️ DeepFace not available")
-        return None
-    
-    try:
-        mem_before = get_memory_usage()
-        
-        # CRITICAL: Resize to 160x160 BEFORE passing to DeepFace
-        if face_roi.shape != (160, 160, 3):
-            face_roi = cv2.resize(face_roi, (160, 160))
-        
-        # Load model on-demand (lazy loading for memory efficiency)
-        embedding_objs = DeepFace.represent(
-            img_path=face_roi,
-            model_name=MODEL_NAME,
-            enforce_detection=False,  # Avoid crashes on low-quality frames
-            detector_backend="skip",  # Skip detection since we already have ROI
-            normalization="base"
-        )
-        
-        mem_after = get_memory_usage()
-        if mem_after - mem_before > 100:
-            logger.warning(f"⚠️ Large memory spike during embedding: +{mem_after - mem_before:.1f} MB")
-        
-        if embedding_objs and len(embedding_objs) > 0:
-            embedding = embedding_objs[0].get("embedding")
-            if embedding:
-                return np.array(embedding, dtype=np.float32)
-    except Exception as e:
-        logger.debug(f"Embedding error: {str(e)[:100]}")
-        gc.collect()  # Force garbage collection on error
-    
-    return None
-
-
 @app.post("/recognize")
-async def recognize(req: RecognitionRequest):
-    """Recognize faces in image - OPTIMIZED for speed with lazy model loading"""
+async def recognize(file: UploadFile = File(...)) -> RecognizeResponse:
+    """
+    Recognize: Compare face in image against all trained students
+    Expects: form with single image file called 'file'
+    """
     try:
-        logger.info(f"🔍 Recognition request (loaded: {len(known_face_names)} students)")
+        if not check_db_connection():
+            raise HTTPException(status_code=503, detail="MongoDB not available")
         
-        with lock:
-            if not known_face_encodings:
-                logger.warning("⚠️ No students loaded in memory")
-                return {
-                    "success": True,
-                    "faces": [],
-                    "loaded_students": 0,
-                    "note": "No trained students loaded"
-                }
-            
-            # Decode image
-            rgb = decode_base64(req.image)
-            if rgb is None:
-                logger.error("❌ Failed to decode image")
-                return {"success": False, "faces": [], "error": "Decode failed"}
-            
-            logger.debug(f"✅ Image decoded: {rgb.shape}")
-            
-            # Detect faces using opencv
-            faces = detect_faces_opencv(rgb)
-            if not faces:
-                logger.debug("ℹ️ No faces detected")
-                return {
-                    "success": True,
-                    "faces": [],
-                    "loaded_students": len(known_face_names),
-                    "note": "No faces detected in image"
-                }
-            
-            logger.info(f"👤 Detected {len(faces)} face(s)")
-            results = []
-            
-            # Process each face
-            for idx, (face_roi, box) in enumerate(faces):
-                try:
-                    # Get embedding with lazy-loaded Facenet model
-                    emb = get_embedding_facenet(face_roi)
-                    if emb is None:
-                        logger.debug(f"Face {idx+1}: Failed to get embedding")
-                        continue
-                    
-                    emb = normalize_embedding(emb)
-                    
-                    # Find best match - VECTORIZED for speed
-                    max_similarity = -1.0
-                    best_idx = -1
-                    
-                    # Pre-filter: only check against valid embedding dimensions
-                    for i, known_emb in enumerate(known_face_encodings):
-                        similarity = cosine_similarity(emb, known_emb)
-                        
-                        # Early exit if we find a VERY high confidence match (99%+)
-                        if similarity > 0.99:
-                            max_similarity = similarity
-                            best_idx = i
-                            break
-                        
-                        if similarity > max_similarity:
-                            max_similarity = similarity
-                            best_idx = i
-                    
-                    # Check against threshold
-                    if best_idx < 0:
-                        logger.debug(f"Face {idx+1}: No valid match")
-                        continue
-                    
-                    recognized = max_similarity >= THRESHOLD
-                    distance = float(1.0 - max_similarity)
-                    
-                    result = {
-                        "name": known_face_names[best_idx],
-                        "student_id": known_face_ids[best_idx] if recognized else "",
-                        "similarity": float(max_similarity),
-                        "distance": distance,
-                        "recognized": recognized,
-                        "confidence": float(max_similarity),
-                        "box": [int(box[0]), int(box[1]), int(box[0] + box[2]), int(box[1] + box[3])]
-                    }
-                    
-                    results.append(result)
-                    
-                    if recognized:
-                        logger.info(f"✅ MATCHED - {known_face_names[best_idx]} (sim: {max_similarity:.3f})")
-                    else:
-                        logger.debug(f"ℹ️ Close match - {known_face_names[best_idx]} ({max_similarity:.3f} < {THRESHOLD})")
-                        
-                except Exception as e:
-                    logger.error(f"Face {idx+1}: {e}")
-                    continue
-            
-            return {
-                "success": True,
-                "faces": results,
-                "timestamp": datetime.now().isoformat(),
-                "loaded_students": len(known_face_names)
-            }
-            
-    except Exception as e:
-        logger.error(f"❌ Recognition error: {e}")
-        return {"success": False, "faces": [], "error": str(e)}
-
-
-@app.post("/test-detection")
-async def test_detection(req: RecognitionRequest):
-    """Test face detection only"""
-    try:
-        logger.info("🧪 Testing face detection...")
+        logger.info("🔍 Recognition request")
         
-        rgb = decode_base64(req.image)
-        if rgb is None:
-            return {"success": False, "error": "Failed to decode image"}
+        # Read and load image
+        image_bytes = await file.read()
+        image = load_image_from_bytes(image_bytes)
         
-        logger.info(f"✅ Image decoded: {rgb.shape}")
+        if image is None:
+            logger.warning("Failed to load image")
+            return RecognizeResponse(
+                recognized=False,
+                reason="invalid_image"
+            )
+        
+        # Resize for speed
+        image = resize_image_aspect_ratio(image)
         
         # Detect faces
-        faces = detect_faces(rgb)
+        face_locations = face_recognition.face_locations(image, model="hog")
         
-        if not faces:
-            logger.warning("⚠️ No faces detected")
-            return {
-                "success": True,
-                "faces_detected": 0,
-                "message": "No faces detected. Try: better lighting, face camera directly, adjust distance"
-            }
+        if not face_locations:
+            logger.debug("No face detected in image")
+            return RecognizeResponse(
+                recognized=False,
+                reason="no_face"
+            )
         
-        logger.info(f"✅ Detected {len(faces)} face(s)")
+        # Get encoding for first face
+        face_encodings = face_recognition.face_encodings(image, face_locations)
         
-        face_boxes = []
-        for idx, (roi, box) in enumerate(faces):
-            x, y, w, h = box
-            face_boxes.append({
-                "index": idx,
-                "box": [int(x), int(y), int(x + w), int(y + h)],
-                "size": f"{w}x{h}px"
-            })
+        if not face_encodings:
+            logger.debug("Failed to get encoding")
+            return RecognizeResponse(
+                recognized=False,
+                reason="no_encoding"
+            )
+        
+        unknown_encoding = face_encodings[0]
+        
+        # Load all trained students from MongoDB
+        all_students = list(embeddings_collection.find({}))
+        
+        if not all_students:
+            logger.debug("No students trained yet")
+            return RecognizeResponse(
+                recognized=False,
+                reason="no_students_trained"
+            )
+        
+        logger.info(f"Comparing against {len(all_students)} trained students")
+        
+        # Compare against all students
+        best_match_id = None
+        best_distance = float('inf')
+        best_confidence = 0.0
+        
+        for student_doc in all_students:
+            student_id = student_doc["student_id"]
+            avg_embedding = np.array(student_doc["avg_embedding"])
+            
+            # Compute distance
+            distance = face_recognition.face_distance([avg_embedding], unknown_encoding)[0]
+            
+            # Check match (tolerance=0.5 is default)
+            matches = face_recognition.compare_faces(
+                [avg_embedding],
+                unknown_encoding,
+                tolerance=0.5
+            )
+            
+            is_match = matches[0]
+            
+            logger.debug(f"  {student_id}: distance={distance:.3f}, match={is_match}")
+            
+            # Update best match if this is better (lower distance)
+            if distance < best_distance:
+                best_distance = distance
+                best_match_id = student_id if is_match else None
+                best_confidence = 1.0 - distance  # Convert distance to confidence
+        
+        # Return result
+        if best_match_id is not None and best_distance <= 0.5:
+            logger.info(f"✅ MATCHED: {best_match_id} (distance={best_distance:.3f})")
+            return RecognizeResponse(
+                recognized=True,
+                student_id=best_match_id,
+                confidence=float(best_confidence),
+                distance=float(best_distance)
+            )
+        else:
+            logger.info(f"❌ NO MATCH: best distance={best_distance:.3f}")
+            return RecognizeResponse(
+                recognized=False,
+                reason="no_match",
+                distance=float(best_distance)
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Recognition error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/student/{student_id}")
+async def delete_student(student_id: str):
+    """Delete a student's embeddings from MongoDB"""
+    try:
+        if not check_db_connection():
+            raise HTTPException(status_code=503, detail="MongoDB not available")
+        
+        logger.info(f"🗑️ Deleting student {student_id}")
+        
+        result = embeddings_collection.delete_one({"student_id": student_id})
+        
+        if result.deleted_count == 0:
+            logger.warning(f"Student {student_id} not found")
+            raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
+        
+        logger.info(f"✅ Deleted {student_id}")
+        return {"success": True, "student_id": student_id}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Delete error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/students")
+async def list_students():
+    """Get list of all trained student IDs"""
+    try:
+        if not check_db_connection():
+            raise HTTPException(status_code=503, detail="MongoDB not available")
+        
+        students = list(embeddings_collection.find({}, {"student_id": 1}))
+        student_ids = [s["student_id"] for s in students]
+        
+        logger.info(f"Retrieved {len(student_ids)} trained students")
         
         return {
-            "success": True,
-            "faces_detected": len(faces),
-            "faces": face_boxes,
-            "message": f"Successfully detected {len(faces)} face(s)"
+            "trained_students": student_ids,
+            "count": len(student_ids)
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ Detection test error: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"❌ List students error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================================
 # STARTUP
 # ============================================================================
 
 if __name__ == "__main__":
-    import uvicorn
-    import os
-
-    port = int(os.environ.get("PORT", 8000))  
-
     print("\n" + "="*70)
-    print("Starting AURA Face Recognition API v4.0 - Render Optimized")
+    print("Starting AURA Face Recognition API v5.0 - dlib Edition")
     print("="*70)
-    print(f"📍 Address: http://0.0.0.0:{port}")
-    print(f"🔧 Model: {MODEL_NAME}")
-    print(f"⚡ Memory Mode: Lazy-loaded, one-at-a-time processing")
-    print(f"🔐 CORS: Explicit origins, proper preflight handling")
+    print(f"📍 Service: Face recognition using face_recognition (dlib)")
+    print(f"🎯 Model: HOG face detection + 128-d dlib CNN encoding")
+    print(f"💾 Database: MongoDB at {MONGODB_URI[:50]}...")
+    print(f"🌐 CORS Origins: {CORS_ORIGIN}")
     print("="*70 + "\n")
-
+    
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=port,
+        port=8000,
         log_level="info",
         timeout_keep_alive=120
     )
+
 

@@ -108,23 +108,42 @@ export const trainStudent = async (studentId: string, images: string[]) => {
       throw new Error(`Python Face API unreachable (${PYTHON_API_URL}): ${m}`)
     }
 
-    // Use AbortController to enforce a timeout for the training request
+    // Convert base64 images to File objects
+    const files: File[] = []
+    for (let i = 0; i < images.length; i++) {
+      const base64 = images[i]
+      // Remove data URI prefix if present
+      const base64Data = base64.includes(',') ? base64.split(',')[1] : base64
+      const binaryString = atob(base64Data)
+      const bytes = new Uint8Array(binaryString.length)
+      for (let j = 0; j < binaryString.length; j++) {
+        bytes[j] = binaryString.charCodeAt(j)
+      }
+      const file = new File([bytes], `image_${i}.jpg`, { type: 'image/jpeg' })
+      files.push(file)
+    }
+
+    // Create FormData with student_id and files
+    const formData = new FormData()
+    formData.append('student_id', studentId)
+    for (const file of files) {
+      formData.append('files', file)
+    }
+
+    // Use AbortController to enforce timeout (120 seconds for dlib)
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 300_000) // 5 minutes (extended from 3)
+    const timeout = setTimeout(() => controller.abort(), 120_000) // 2 minutes
 
     let response: Response
     try {
       response = await fetch(`${PYTHON_API_URL}/train`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ student_id: studentId, images: images }),
+        body: formData,
         signal: controller.signal
       })
     } catch (err) {
       if ((err as any)?.name === 'AbortError') {
-        throw new Error('Training request timed out (5 minutes). Check Python API is running.')
+        throw new Error('Training request timed out. Check Python API is running.')
       }
       const m = err instanceof Error ? err.message : String(err)
       throw new Error(`Failed to reach Python API: ${m}`)
@@ -151,13 +170,13 @@ export const trainStudent = async (studentId: string, images: string[]) => {
 
     console.log('✅ Training completed:', result)
     
-    // Python API returns 'embedding' not 'encodings'
-    if (!result.embedding || !Array.isArray(result.embedding)) {
-      throw new Error('Invalid embedding received from Python API - expected 512-d array')
+    // Python API returns 'avg_embedding' for 128-d dlib encoding
+    if (!result.avg_embedding || !Array.isArray(result.avg_embedding)) {
+      throw new Error('Invalid embedding received from Python API')
     }
     
-    console.log(`✅ Valid embedding received: ${result.embedding.length} dimensions`)
-    return result.embedding
+    console.log(`✅ Valid embedding received: ${result.avg_embedding.length} dimensions`)
+    return result.avg_embedding
   } catch (error) {
     // Ensure we always throw an Error with a string message
     const errorMessage = error instanceof Error ? error.message : String(error)
@@ -170,21 +189,25 @@ export const recognizeFaces = async (imageBase64: string, students: any[] = []) 
   try {
     console.log('🔍 Sending recognition request to Python API...')
     
-    // Load students into API memory if provided
-    if (students && students.length > 0) {
-      await loadStudentsToAPI(students).catch(() => {
-        // Silent fail if already loaded or if it fails
-      })
+    // Note: In the new architecture, students are stored in MongoDB on the Python API
+    // No need to load them separately
+
+    // Convert base64 to File object
+    const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64
+    const binaryString = atob(base64Data)
+    const bytes = new Uint8Array(binaryString.length)
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i)
     }
+    const file = new File([bytes], 'image.jpg', { type: 'image/jpeg' })
+
+    // Create FormData with 'file' field
+    const formData = new FormData()
+    formData.append('file', file)
 
     const response = await fetch(`${PYTHON_API_URL}/recognize`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        image: imageBase64
-      })
+      body: formData
     })
 
     console.log('Python API response status:', response.status)
@@ -197,7 +220,19 @@ export const recognizeFaces = async (imageBase64: string, students: any[] = []) 
 
     const result = await response.json()
     console.log('✅ Python API response:', result)
-    return result.faces || []
+    
+    // New API returns recognized boolean + student_id + confidence + distance
+    if (result.recognized) {
+      return [{
+        name: result.student_id || 'Unknown',
+        student_id: result.student_id,
+        confidence: result.confidence,
+        distance: result.distance,
+        recognized: true
+      }]
+    }
+    
+    return []
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
     console.error('❌ Recognition error:', msg)
