@@ -22,9 +22,14 @@ app.use('/api/faculty', require('./routes/faculty'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/timetable', require('./routes/timetable'));
 
-// Health check
+// Root health check endpoint (no /api prefix)
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', message: 'Attendance System running', timestamp: new Date().toISOString() });
+});
+
+// Health check at /api/health (for backward compatibility)
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Server is running' });
+  res.json({ status: 'OK', message: 'Server is running', timestamp: new Date().toISOString() });
 });
 
 // Handle 404 for API routes
@@ -32,13 +37,26 @@ app.use('/api/*', (req, res) => {
   res.status(404).json({ message: 'API route not found', path: req.path });
 });
 
-// Handle root path - not needed for API server
+// Root API info endpoint
 app.get('/', (req, res) => {
-  res.json({ message: 'Attendance System API', status: 'running', version: '1.0.0' });
+  res.json({ 
+    message: 'Attendance System API', 
+    status: 'running', 
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      api: '/api',
+      admin: '/api/admin',
+      auth: '/api/auth',
+      faculty: '/api/faculty',
+      attendance: '/api/attendance',
+      timetable: '/api/timetable'
+    }
+  });
 });
 
-// Handle other routes (for frontend) - this won't be hit in API-only mode
-app.get('*', (req, res) => {
+// Catch-all for unmatched routes
+app.use('*', (req, res) => {
   res.status(404).json({ message: 'Route not found', path: req.path });
 });
 
