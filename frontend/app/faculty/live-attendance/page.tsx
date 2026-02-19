@@ -49,6 +49,13 @@ export default function LiveAttendance() {
     MANUAL_CONFIRM: 0.35, // distance ≤ 0.35 (similarity ≥ 0.65)
     MANUAL_REVIEW: Infinity, // distance > 0.35 (similarity < 0.65)
   };
+
+  // Helper function to get student name from student_id
+  const getStudentName = (studentId: string): string => {
+    const student = students.find((s) => s.studentId === studentId);
+    return student ? student.name : studentId;
+  };
+
   const [pendingConfirmation, setPendingConfirmation] =
     useState<DetectedFace | null>(null);
   const [thresholdStats, setThresholdStats] = useState({
@@ -360,7 +367,7 @@ export default function LiveAttendance() {
           console.log(`👤 Recognized: ${result.student_id} (distance: ${result.distance?.toFixed(3)})`);
           handleRecognitionResult([{
             student_id: result.student_id,
-            name: result.student_id,
+            name: getStudentName(result.student_id),
             distance: result.distance || 0,
             box: [0, 0, 0, 0], // API doesn't provide box coordinates, use defaults
             recognized: true
