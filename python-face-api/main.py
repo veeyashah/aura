@@ -727,12 +727,15 @@ async def test_detection(req: RecognitionRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    
+    import os
+
+    port = int(os.environ.get("PORT", 8000))  
+
     print("\n" + "="*70)
     print("Starting AURA Face Recognition API v4.0")
     print("="*70)
-    print("📍 Address: http://0.0.0.0:8000")
-    print("📚 Docs: http://localhost:8000/docs")
+    print(f"📍 Address: http://0.0.0.0:{port}")
     print("="*70 + "\n")
-    
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
