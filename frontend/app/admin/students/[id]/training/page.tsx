@@ -239,6 +239,28 @@ export default function StudentTraining() {
         throw new Error('Student information not loaded. Please refresh the page.')
       }
       
+      // Step 1: Wakeup Render service (cold start)
+      console.log('🌅 Waking up face recognition service...')
+      const wakeupController = new AbortController()
+      const wakeupTimeout = setTimeout(() => wakeupController.abort(), 10000)
+      
+      try {
+        const wakeupResponse = await fetch(
+          'https://aura-face-api.onrender.com/wakeup',
+          { signal: wakeupController.signal }
+        )
+        if (!wakeupResponse.ok) {
+          throw new Error(`Wakeup failed: HTTP ${wakeupResponse.status}`)
+        }
+        console.log('✅ Face recognition service is awake')
+      } finally {
+        clearTimeout(wakeupTimeout)
+      }
+
+      // Step 2: Wait 2 seconds for service to fully initialize
+      console.log('⏳ Waiting for service initialization...')
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      
       console.log(`📚 Training student: ${student.studentId}`)
       const embeddings = await trainStudent(student.studentId, images)
       

@@ -1,11 +1,12 @@
 """
-AURA Face Recognition API - Memory Optimized
+AURA Face Recognition API - Render Free Tier Optimized
 Model: Facenet (128-d embeddings, CPU-friendly)
-Detector: OpenCV (lightweight, optimized for Render)
-Optimized for Render Free Tier with lazy model loading
+Detector: OpenCV (lightweight, memory-efficient)
+CORS Fixed: Explicit origins with proper preflight handling
+Memory Optimized: One-at-a-time image processing with gc cleanup
 """
 
-# ⚡ Disable TensorFlow GPU checks - MUST BE FIRST
+# ⚡ Disable TensorFlow GPU checks - MUST BE FIRST (before any TF import)
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
@@ -140,6 +141,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"🔍 Detector: {DETECTOR} (OpenCV)")
     logger.info(f"🎯 Threshold: {THRESHOLD} (cosine similarity)")
     logger.info("⚡ Model loading on-demand (lazy) to save memory")
+    logger.info("✅ CORS Fixed: Explicit origins, proper preflight handling")
     logger.info("="*70 + "\n")
     yield
     logger.info("👋 API shutdown")
@@ -201,9 +203,6 @@ def decode_base64(b64_str: str) -> Optional[np.ndarray]:
         return None
 
 
-
-
-
 def detect_faces_opencv(rgb_img: np.ndarray) -> List[tuple]:
     """Detect faces using OpenCV Haar Cascade (memory-optimized)"""
     results = []
@@ -240,9 +239,6 @@ def detect_faces(rgb_img: np.ndarray) -> List[tuple]:
     return detect_faces_opencv(rgb_img)
 
 
-
-
-
 def normalize_embedding(emb: np.ndarray) -> np.ndarray:
     """L2 normalize embedding"""
     norm = np.linalg.norm(emb)
@@ -263,6 +259,41 @@ def cosine_similarity(e1: np.ndarray, e2: np.ndarray) -> float:
     return max(0.0, min(1.0, similarity))
 
 
+def get_embedding_facenet(face_roi: np.ndarray) -> Optional[np.ndarray]:
+    """Get embedding using lazy-loaded Facenet model (memory-optimized)"""
+    if not DEEPFACE_AVAILABLE:
+        logger.warning("⚠️ DeepFace not available")
+        return None
+    
+    try:
+        mem_before = get_memory_usage()
+        
+        # CRITICAL: Resize to 160x160 BEFORE passing to DeepFace
+        if face_roi.shape != (160, 160, 3):
+            face_roi = cv2.resize(face_roi, (160, 160))
+        
+        # Load model on-demand (lazy loading for memory efficiency)
+        embedding_objs = DeepFace.represent(
+            img_path=face_roi,
+            model_name=MODEL_NAME,
+            enforce_detection=False,  # Avoid crashes on low-quality frames
+            detector_backend="skip",  # Skip detection since we already have ROI
+            normalization="base"
+        )
+        
+        mem_after = get_memory_usage()
+        if mem_after - mem_before > 100:
+            logger.warning(f"⚠️ Large memory spike during embedding: +{mem_after - mem_before:.1f} MB")
+        
+        if embedding_objs and len(embedding_objs) > 0:
+            embedding = embedding_objs[0].get("embedding")
+            if embedding:
+                return np.array(embedding, dtype=np.float32)
+    except Exception as e:
+        logger.debug(f"Embedding error: {str(e)[:100]}")
+        gc.collect()  # Force garbage collection on error
+    
+    return None
 
 
 # ============================================================================
@@ -448,43 +479,6 @@ async def train(req: TrainingRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def get_embedding_facenet(face_roi: np.ndarray) -> Optional[np.ndarray]:
-    """Get embedding using lazy-loaded Facenet model (memory-optimized)"""
-    if not DEEPFACE_AVAILABLE:
-        logger.warning("⚠️ DeepFace not available")
-        return None
-    
-    try:
-        mem_before = get_memory_usage()
-        
-        # CRITICAL: Resize to 160x160 BEFORE passing to DeepFace
-        if face_roi.shape != (160, 160, 3):
-            face_roi = cv2.resize(face_roi, (160, 160))
-        
-        # Load model on-demand (lazy loading for memory efficiency)
-        embedding_objs = DeepFace.represent(
-            img_path=face_roi,
-            model_name=MODEL_NAME,
-            enforce_detection=False,  # Avoid crashes on low-quality frames
-            detector_backend="skip",  # Skip detection since we already have ROI
-            normalization="base"
-        )
-        
-        mem_after = get_memory_usage()
-        if mem_after - mem_before > 100:
-            logger.warning(f"⚠️ Large memory spike during embedding: +{mem_after - mem_before:.1f} MB")
-        
-        if embedding_objs and len(embedding_objs) > 0:
-            embedding = embedding_objs[0].get("embedding")
-            if embedding:
-                return np.array(embedding, dtype=np.float32)
-    except Exception as e:
-        logger.debug(f"Embedding error: {str(e)[:100]}")
-        gc.collect()  # Force garbage collection on error
-    
-    return None
-
-
 @app.post("/recognize")
 async def recognize(req: RecognitionRequest):
     """Recognize faces in image - OPTIMIZED for speed with lazy model loading"""
@@ -637,6 +631,8 @@ async def test_detection(req: RecognitionRequest):
     except Exception as e:
         logger.error(f"❌ Detection test error: {e}")
         return {"success": False, "error": str(e)}
+
+
 # ============================================================================
 # STARTUP
 # ============================================================================
@@ -663,4 +659,3 @@ if __name__ == "__main__":
         log_level="info",
         timeout_keep_alive=120
     )
-
