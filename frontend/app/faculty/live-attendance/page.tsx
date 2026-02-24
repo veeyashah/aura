@@ -55,7 +55,7 @@ export default function LiveAttendance() {
   // Helper function to get student name from student_id
   const getStudentName = (studentId: string): string => {
     const student = students.find((s) => s.studentId === studentId);
-    return student ? student.name : studentId;
+    return student ? student.name : 'Unknown Student';
   };
 
   const [pendingConfirmation, setPendingConfirmation] =
