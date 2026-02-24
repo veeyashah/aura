@@ -36,10 +36,25 @@ router.get('/dashboard', async (req, res) => {
       date: { $gte: today, $lt: tomorrow }
     });
     
-    // Count lecture attendance (all time)
-    const lectureAttendance = await Attendance.countDocuments({
-      lectureType: { $in: ['Lecture', 'Practical', 'Tutorial'] }
-    });
+    // Count lecture attendance (all time) - ONLY FOR EXISTING STUDENTS
+    const lectureAttendanceResult = await Attendance.aggregate([
+      { $match: { lectureType: { $in: ['Lecture', 'Practical', 'Tutorial'] } } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'studentId',
+          foreignField: 'studentId',
+          as: 'student'
+        }
+      },
+      {
+        $match: {
+          $expr: { $gt: [{ $size: '$student' }, 0] }
+        }
+      },
+      { $count: 'total' }
+    ]);
+    const lectureAttendance = lectureAttendanceResult.length > 0 ? lectureAttendanceResult[0].total : 0;
     
     // Count event attendance (all time) - will be 0 since events removed
     const eventAttendance = 0;
