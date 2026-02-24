@@ -44,12 +44,43 @@ router.get('/dashboard', async (req, res) => {
     // Count event attendance (all time) - will be 0 since events removed
     const eventAttendance = 0;
     
-    // Get recent attendance records (last 10)
-    const recentAttendance = await Attendance.find()
-      .sort({ date: -1, createdAt: -1 })
-      .limit(10)
-      .select('studentId studentName subject facultyName date status lectureType')
-      .lean();
+    // Get recent attendance records (last 10) with student name lookup
+    const recentAttendance = await Attendance.aggregate([
+      { $sort: { date: -1, createdAt: -1 } },
+      { $limit: 10 },
+      {
+        $lookup: {
+          from: 'users',
+          let: { sid: '$studentId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$studentId', '$$sid'] } } },
+            { $project: { name: 1 } }
+          ],
+          as: 'studentData'
+        }
+      },
+      {
+        $addFields: {
+          resolvedName: {
+            $cond: [
+              { $and: [{ $eq: [{ $type: '$studentName' }, 'string'] }, { $gt: [{ $strLenCP: '$studentName' }, 0] }] },
+              '$studentName',
+              { $cond: [{ $gt: [{ $size: '$studentData' }, 0] }, { $arrayElemAt: ['$studentData.name', 0] }, 'Unknown'] }
+            ]
+          }
+        }
+      },
+      {
+        $project: {
+          studentName: '$resolvedName',
+          subject: 1,
+          facultyName: 1,
+          date: 1,
+          status: 1,
+          lectureType: 1
+        }
+      }
+    ]);
     
     // Format recent attendance
     const formattedRecent = recentAttendance.map(record => ({
